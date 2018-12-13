@@ -149,8 +149,10 @@ class InceptionTransformerModel(InceptionFairseqModel):
         decoders = nn.ModuleList([
             InceptionTransformerDecoder(args, tgt_dict, decoder_embed_tokens, i) for i in range(len(len(args.decoder_layers)))
         ])
+        encoder_bridge = None
         if args.encoder_combine == 'mlp':
             encoder_bridge = Linear(args.encoder_embed_dim * len(args.encoder_layers), args.encoder_embed_dim)
+        decoder_bridge = None
         if args.decoder_combine == 'mlp':
             decoder_bridge = Linear(args.decoder_embed_dim * len(args.decoder_layers), args.decoder_embed_dim)
         return InceptionTransformerModel(encoders, decoders, encoder_bridge, decoder_bridge)
@@ -715,12 +717,6 @@ def base_architecture(args):
 
     args.decoder_output_dim = getattr(args, 'decoder_output_dim', args.decoder_embed_dim)
     args.decoder_input_dim = getattr(args, 'decoder_input_dim', args.decoder_embed_dim)
-
-
-@register_model_architecture('inception_transformer', 'inception_transformer_wmt_en_de')
-def transformer_wmt_en_de(args):
-    base_architecture(args)
-
 
 @register_model_architecture('inception_transformer', 'inception_transformer_wmt_en_de')
 def inception_transformer_wmt_en_de(args):
