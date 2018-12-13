@@ -183,6 +183,57 @@ class FairseqModel(BaseFairseqModel):
         """Maximum length supported by the model."""
         return (self.encoder.max_positions(), self.decoder.max_positions())
 
+class InceptionFairseqModel(BaseFairseqModel):
+    """Base class for encoder-decoder models.
+
+    Args:
+        encoder (FairseqEncoder): the encoder
+        decoder (FairseqDecoder): the decoder
+    """
+
+    def __init__(self, encoders, decoders, encoder_bridge=None, decoder_bridge=None):
+        super().__init__()
+
+        self.encoders = encoders
+        self.decoders = decoders
+        for encoder in self.encoders:
+            assert isinstance(encoder, FairseqEncoder)
+        for decoder in self.decoders:
+            assert isinstance(decoder, FairseqDecoder)
+        self.encoder_bridge = encoder_bridge
+        self.decoder_bridge = decoder_bridge
+
+    def forward(self, src_tokens, src_lengths, prev_output_tokens):
+        """
+        Run the forward pass for an encoder-decoder model.
+
+        First feed a batch of source tokens through the encoder. Then, feed the
+        encoder output and previous decoder outputs (i.e., input feeding/teacher
+        forcing) to the decoder to produce the next outputs::
+
+            encoder_out = self.encoder(src_tokens, src_lengths)
+            return self.decoder(prev_output_tokens, encoder_out)
+
+        Args:
+            src_tokens (LongTensor): tokens in the source language of shape
+                `(batch, src_len)`
+            src_lengths (LongTensor): source sentence lengths of shape `(batch)`
+            prev_output_tokens (LongTensor): previous decoder outputs of shape
+                `(batch, tgt_len)`, for input feeding/teacher forcing
+
+        Returns:
+            the decoder's output, typically of shape `(batch, tgt_len, vocab)`
+        """
+        encoder_out = torch.cat([encoder(src_tokens, src_lengths) for encoder in self.encoders], -1)
+        encoder_bridge_out = torch.tanh(self.encoder_bridge(encoder_out))
+        decoder_out = torch.cat([decoder(prev_output_tokens, encoder_out) for decoder in self.decoders], -1)
+        decoder_bridge_out = torch.tanh(self.decoder_bridge(decoder_out))
+        return decoder_bridge_out
+
+    def max_positions(self):
+        """Maximum length supported by the model."""
+        return (min(map(lambda enc: enc.max_positions(), self.encoders)), 
+                min(map(lambda dec: dec.max_positions(), self.decoders)))
 
 class FairseqMultiModel(BaseFairseqModel):
     """Base class for combining multiple encoder-decoder models."""
