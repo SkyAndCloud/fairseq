@@ -34,8 +34,8 @@ class RNMTModel(FairseqModel):
                             help='number of decoder layers')
         parser.add_argument('--decoder-out-embed-dim', type=int, metavar='N',
                             help='decoder output embedding dimension')
-        parser.add_argument('--share-decoder-input-output-embed', default=False,
-                            action='store_true',
+        parser.add_argument('--share-decoder-input-output-embed', default=True,
+                            action='store_false',
                             help='share decoder input and output embeddings')
         parser.add_argument('--share-all-embeddings', default=False, action='store_true',
                             help='share encoder, decoder and output embeddings'
@@ -44,7 +44,6 @@ class RNMTModel(FairseqModel):
         parser.add_argument('--common-dropout', type=int)
         parser.add_argument('--rnn-dropout', type=int)
         parser.add_argument('--head-count', type=int)
-        parser.add_argument('--label-smoothing', type=float)
         # fmt: on
 
     @classmethod
@@ -179,7 +178,7 @@ class Encoder(FairseqEncoder):
 
         return {
             'encoder_out': x,
-            'encoder_padding_mask': encoder_padding_mask if encoder_padding_mask.any() else None
+            'encoder_padding_mask': encoder_padding_mask
         }
 
     def reorder_encoder_out(self, encoder_out, new_order):
@@ -215,20 +214,20 @@ class MultiHeadMLPAttention(nn.Module):
         self.linear_keys = Linear(key_dim, head_count * self.dim_per_head)
         self.linear_query = Linear(query_dim, head_count * self.dim_per_head)
         self.linear_weight = Linear(self.dim_per_head, 1)
-        self.final_linear = Linear(self.dim_per_head * head_count, model_dim)
+        self.final_linear = Linear(key_dim, key_dim)
         self.sm = nn.Softmax(dim=-1)
 
     def _split_heads(self, x):
 
         batch_size = x.size(0)
 
-        return x.view(batch_size, -1, self.head_count, self.dim_per_head).transpose(1, 2).contiguous()
+        return x.view(batch_size, -1, self.head_count, x.size(-1) // self.head_count).transpose(1, 2).contiguous()
 
     def _combine_heads(self, x):
 
         seq_len = x.size(2)
 
-        return x.transpose(1, 2).contiguous().view(-1, seq_len, self.head_count * self.dim_per_head)
+        return x.transpose(1, 2).contiguous().view(-1, seq_len, self.head_count * x.size(-1))
 
     def forward(self, key, value, query, mask=None, enc_attn_cache=None):
         batch_size = key.size(0)
@@ -253,7 +252,7 @@ class MultiHeadMLPAttention(nn.Module):
             scores = scores.masked_fill(mask, float('-inf'))
 
         # 3) Apply attention dropout and compute context vectors.
-        attn = self.sm(scores)
+        attn = self.sm(scores).unsqueeze(2)
         context = self._combine_heads(torch.matmul(attn, value_up))
 
         output = self.final_linear(context)
@@ -314,7 +313,7 @@ class Decoder(FairseqIncrementalDecoder):
         if cached_state is not None:
             prev_hiddens, attn_cache = cached_state
         else:
-            no_padding_mask = 1. - encoder_padding_mask
+            no_padding_mask = 1. - encoder_padding_mask.float()
             ctx_mean = (encoder_out * no_padding_mask.unsqueeze(2)).sum(0) / no_padding_mask.unsqueeze(2).sum(0)
             prev_hiddens = torch.tanh(self.linear_bridge(ctx_mean))
             attn_cache = None
@@ -328,7 +327,8 @@ class Decoder(FairseqIncrementalDecoder):
                                                                query=tmp_hidden.unsqueeze(1),
                                                                mask=encoder_padding_mask.transpose(0, 1),
                                                                enc_attn_cache=attn_cache)
-            prev_hiddens = self.gru2(attn_ctx.transpose(0, 1), tmp_hidden)
+            attn_ctx = attn_ctx.squeeze(1)
+            prev_hiddens = self.gru2(attn_ctx, tmp_hidden)
             hiddens.append(prev_hiddens)
             attn_ctxs.append(attn_ctx)
 
@@ -350,13 +350,12 @@ class Decoder(FairseqIncrementalDecoder):
             p=self.common_dropout,
             training=self.training
         )
-
         if self.share_input_output_embed:
             output = F.linear(logits, self.embed_tokens.weight)
         else:
             output = self.linear_proj(logits)
 
-        return output
+        return output, None
 
     def reorder_incremental_state(self, incremental_state, new_order):
         super().reorder_incremental_state(incremental_state, new_order)
