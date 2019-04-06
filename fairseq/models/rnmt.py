@@ -1,9 +1,11 @@
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from fairseq import options, utils
-from fairseq.modules import AdaptiveSoftmax
+from fairseq.modules import (AdaptiveSoftmax, SinusoidalPositionalEmbedding)
 from . import (
     FairseqEncoder, FairseqIncrementalDecoder, FairseqModel, register_model,
     register_model_architecture,
@@ -44,6 +46,8 @@ class RNMTModel(FairseqModel):
         parser.add_argument('--common-dropout', type=int)
         parser.add_argument('--rnn-dropout', type=int)
         parser.add_argument('--head-count', type=int)
+        parser.add_argument('--src-pe', action='store_true', default=False)
+        parser.add_argument('--tgt-pe', action='store_true', default=False)
         # fmt: on
 
     @classmethod
@@ -88,6 +92,8 @@ class RNMTModel(FairseqModel):
             rnn_dropout=args.rnn_dropout,
             bidirectional=args.encoder_bidirectional,
             pretrained_embed=pretrained_encoder_embed,
+            src_pe=args.src_pe,
+            max_source_positions=args.max_source_positions,
         )
         decoder = Decoder(
             dictionary=task.target_dictionary,
@@ -101,6 +107,8 @@ class RNMTModel(FairseqModel):
             encoder_output_units=encoder.output_units,
             share_input_output_embed=args.share_decoder_input_output_embed,
             pretrained_embed=pretrained_decoder_embed,
+            tgt_pe=args.tgt_pe,
+            max_target_positions=args.max_target_positions,
         )
         return cls(encoder, decoder)
 
@@ -110,7 +118,8 @@ class Encoder(FairseqEncoder):
     def __init__(
         self, dictionary, embed_dim=512, hidden_size=512, num_layers=2,
         common_dropout=0.5, rnn_dropout=0.3, bidirectional=True,
-        left_pad=True, padding_value=0., pretrained_embed=None,
+        left_pad=True, padding_value=0., pretrained_embed=None, 
+        src_pe=False, max_source_positions=-1,
     ):
         super().__init__(dictionary)
         self.num_layers = num_layers
@@ -140,6 +149,12 @@ class Encoder(FairseqEncoder):
         if bidirectional:
             self.output_units *= 2
 
+        if src_pe:
+            self.src_pe = SinusoidalPositionalEmbedding(embed_dim, self.padding_idx, left_pad, max_source_positions + self.padding_idx + 1)
+            self.embed_scale = math.sqrt(embed_dim)
+        else:
+            self.src_pe = None
+
     def forward(self, src_tokens, src_lengths):
         if self.left_pad:
             # convert left-padding to right-padding
@@ -153,6 +168,8 @@ class Encoder(FairseqEncoder):
 
         # embed tokens
         x = self.embed_tokens(src_tokens)
+        if self.src_pe:
+            x = self.src_pe(x) * self.embed_scale + x
         x = F.dropout(x, p=self.common_dropout, training=self.training)
 
         # B x T x C -> T x B x C
@@ -264,6 +281,7 @@ class Decoder(FairseqIncrementalDecoder):
         self, dictionary, embed_dim=512, hidden_size=512, out_embed_dim=512,
         num_layers=1, common_dropout=0.5, rnn_dropout=0.3, head_count=8,
         encoder_output_units=1024, share_input_output_embed=True, pretrained_embed=None,
+        tgt_pe=False, left_pad=False, max_target_positions=-1,
     ):
         super().__init__(dictionary)
         self.common_dropout = common_dropout
@@ -287,18 +305,34 @@ class Decoder(FairseqIncrementalDecoder):
         if not self.share_input_output_embed:
             self.linear_proj = Linear(out_embed_dim, num_embeddings)
 
+        if tgt_pe:
+            self.tgt_pe = SinusoidalPositionalEmbedding(embed_dim, self.padding_idx, left_pad, max_target_positions + self.padding_idx + 1)
+            self.embed_scale = math.sqrt(embed_dim)
+        else:
+            self.tgt_pe = None
+
     def forward(self, prev_output_tokens, encoder_out_dict, incremental_state=None):
         encoder_out = encoder_out_dict['encoder_out']
         encoder_padding_mask = encoder_out_dict['encoder_padding_mask']
 
+        positions = self.tgt_pe(
+            prev_output_tokens, 
+            incremental_state=incremental_state,
+        ) if self.tgt_pe is not None else None
+
         if incremental_state is not None:
             prev_output_tokens = prev_output_tokens[:, -1:]
+            if positions is not None:
+                positions = positions[:, -1:]
+
         bsz, seqlen = prev_output_tokens.size()
 
         srclen = encoder_out.size(0)
 
         # embed tokens
         x = self.embed_tokens(prev_output_tokens)
+        if positions is not None:
+            x = self.tgt_pe * self.embed_scale + x
         x = F.dropout(x, p=self.common_dropout, training=self.training)
 
         # B x T x C -> T x B x C
@@ -424,3 +458,5 @@ def base_architecture(args):
     args.decoder_out_embed_dim = getattr(args, 'decoder_out_embed_dim', 512)
     args.share_decoder_input_output_embed = getattr(args, 'share_decoder_input_output_embed', True)
     args.share_all_embeddings = getattr(args, 'share_all_embeddings', False)
+    args.src_pe = getattr(args, 'src_pe', True)
+    args.tgt_pe = getattr(args, 'tgt_pe', True)
