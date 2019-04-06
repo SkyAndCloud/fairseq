@@ -182,10 +182,7 @@ class Encoder(FairseqEncoder):
         }
 
     def reorder_encoder_out(self, encoder_out, new_order):
-        encoder_out['encoder_out'] = tuple(
-            eo.index_select(1, new_order)
-            for eo in encoder_out['encoder_out']
-        )
+        encoder_out['encoder_out'] = encoder_out['encoder_out'].index_select(1, new_order)
         if encoder_out['encoder_padding_mask'] is not None:
             encoder_out['encoder_padding_mask'] = \
                 encoder_out['encoder_padding_mask'].index_select(1, new_order)
