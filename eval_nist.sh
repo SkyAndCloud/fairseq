@@ -17,8 +17,8 @@ declare -a refset=(
 len=${#testset[@]}
 max=`echo $len-1|bc`
 script='/home4/gushuhao/2.data/NIST/mfd_1.25M/nist_test_new/multi-bleu.perl'
-BEAM=10
-ALPHA=0
+BEAM=4
+ALPHA=0.6
 BATCH=250
 DATABIN=../kernel_attention/data-bin/NIST_zh_en_1.25m
 

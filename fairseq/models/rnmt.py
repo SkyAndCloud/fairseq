@@ -150,7 +150,7 @@ class Encoder(FairseqEncoder):
             self.output_units *= 2
 
         if src_pe:
-            self.src_pe = SinusoidalPositionalEmbedding(embed_dim, self.padding_idx, left_pad, max_source_positions + self.padding_idx + 1)
+            self.src_pe = SinusoidalPositionalEmbedding(embed_dim, self.padding_idx, False, max_source_positions + self.padding_idx + 1)
             self.embed_scale = math.sqrt(embed_dim)
         else:
             self.src_pe = None
@@ -458,5 +458,24 @@ def base_architecture(args):
     args.decoder_out_embed_dim = getattr(args, 'decoder_out_embed_dim', 512)
     args.share_decoder_input_output_embed = getattr(args, 'share_decoder_input_output_embed', True)
     args.share_all_embeddings = getattr(args, 'share_all_embeddings', False)
-    args.src_pe = getattr(args, 'src_pe', True)
-    args.tgt_pe = getattr(args, 'tgt_pe', True)
+    args.src_pe = getattr(args, 'src_pe', False)
+    args.tgt_pe = getattr(args, 'tgt_pe', False)
+
+@register_model_architecture('rnmt', 'rnmt_base_ende')
+def base_architecture(args):
+    args.common_dropout = getattr(args, 'common_dropout', 0.3)
+    args.rnn_dropout = getattr(args, 'rnn_dropout', 0.1)
+    args.head_count = getattr(args, 'head_count', 8)
+    args.label_smoothing = getattr(args, 'label_smoothing', 0.1)
+    args.encoder_embed_dim = getattr(args, 'encoder_embed_dim', 1024)
+    args.encoder_hidden_size = getattr(args, 'encoder_hidden_size', args.encoder_embed_dim)
+    args.encoder_layers = getattr(args, 'encoder_layers', 2)
+    args.encoder_bidirectional = getattr(args, 'encoder_bidirectional', True)
+    args.decoder_embed_dim = getattr(args, 'decoder_embed_dim', 1024)
+    args.decoder_hidden_size = getattr(args, 'decoder_hidden_size', args.decoder_embed_dim)
+    args.decoder_layers = getattr(args, 'decoder_layers', 1)
+    args.decoder_out_embed_dim = getattr(args, 'decoder_out_embed_dim', 1024)
+    args.share_decoder_input_output_embed = getattr(args, 'share_decoder_input_output_embed', True)
+    args.share_all_embeddings = getattr(args, 'share_all_embeddings', True)
+    args.src_pe = getattr(args, 'src_pe', False)
+    args.tgt_pe = getattr(args, 'tgt_pe', False)
