@@ -11,6 +11,21 @@ from . import (
     register_model_architecture,
 )
 
+import ipdb
+import numpy as np
+def _bp_hook_factory(n):
+    def _bp_hook(grad):
+        if np.isinf(grad.detach().cpu().numpy()).any():
+            import pdb; pdb.set_trace()
+        if torch.isnan(grad).any():
+            print('{} grad is NaN!'.format(n))
+    return _bp_hook
+
+def _isnan(x):
+    return np.isnan(x.detach().cpu().numpy()).any()
+def _isinf(x):
+    return np.isinf(x.detach().cpu().numpy()).any()
+
 @register_model('abdnmt')
 class ABDNMT(FairseqModel):
     def __init__(self, encoder, decoder):
@@ -112,6 +127,7 @@ class ABDNMT(FairseqModel):
             tgt_pe=args.tgt_pe,
             max_target_positions=args.max_target_positions,
             only_bd=args.only_bd,
+            bd_write=args.bd_write,
         )
         return cls(encoder, decoder)
 
@@ -166,7 +182,6 @@ class Encoder(FairseqEncoder):
                 self.padding_idx,
                 left_to_right=True,
             )
-
         bsz, seqlen = src_tokens.size()
 
         # embed tokens
@@ -278,7 +293,7 @@ class MultiHeadMLPAttention(nn.Module):
         return output, attn, [key_up, value_up]
 
 
-class BackwardDecoder(nn.Module):
+class BackwardDecoder(FairseqIncrementalDecoder):
     """ABDNMT backward decoder."""
     def __init__(
         self, dictionary, embed_dim=512, hidden_size=512, out_embed_dim=512,
@@ -302,7 +317,7 @@ class BackwardDecoder(nn.Module):
         self.encoder_output_units = encoder_output_units
         self.gru1 = GRUCell(embed_dim, hidden_size)
         self.gru2 = GRUCell(encoder_output_units, hidden_size)
-        self.linear_bridge = Linear(encoder_output_units / 2, hidden_size)
+        self.linear_bridge = Linear(encoder_output_units // 2, hidden_size)
         self.attention = MultiHeadMLPAttention(encoder_output_units, hidden_size, hidden_size, head_count)
         self.linear_output = Linear(embed_dim + hidden_size + encoder_output_units, out_embed_dim)
         if not self.share_input_output_embed:
@@ -314,6 +329,7 @@ class BackwardDecoder(nn.Module):
         else:
             self.tgt_pe = None
         self.eos_idx = dictionary.eos()
+        self.padding_idx = padding_idx
 
     def forward(self, prev_output_tokens, encoder_out_dict, test=False):
         """
@@ -322,8 +338,9 @@ class BackwardDecoder(nn.Module):
         :param encoder_out_dict:
         :return:
         """
+        tgt_lengths = prev_output_tokens.ne(self.padding_idx).sum(-1)
         if not test:
-            prev_output_tokens = self.r2l(prev_output_tokens)
+            prev_output_tokens = self.r2l(prev_output_tokens, tgt_lengths)
 
         encoder_out = encoder_out_dict['encoder_out']
         encoder_padding_mask = encoder_out_dict['encoder_padding_mask']
@@ -339,12 +356,17 @@ class BackwardDecoder(nn.Module):
         # B x T x C -> T x B x C
         emb = x.transpose(0, 1)
 
-        no_padding_mask = 1. - encoder_padding_mask.float()
-        encoder_lengths = no_padding_mask.sum(1)
+        no_padding_mask = 1 - encoder_padding_mask
+        # B X 1
+        encoder_lengths = no_padding_mask.sum(0, keepdim=True).t()
         # see https://github.com/pytorch/pytorch/issues/3587
         # see https://pytorch.org/docs/stable/nn.html#gru
-        enc_states = encoder_out.transpose(0, 1).view(bsz, srclen, 2, self.encoder_output_units / 2)
-        forward_n = torch.index_select(enc_states, 1, encoder_lengths - 1)[:, 0, 0, :]
+        # B x S x 2C
+        enc_states = encoder_out.transpose(0, 1)
+        # B x 1 x 2C
+        enc_forward_idx = (encoder_lengths - 1).unsqueeze(-1).expand(-1, -1, enc_states.size(-1))
+        forward_n = torch.gather(enc_states, 1, enc_forward_idx)
+        forward_n = forward_n.view(bsz, 1, 2, self.encoder_output_units // 2)[:, 0, 0, :]
         prev_hiddens = torch.tanh(self.linear_bridge(forward_n))
         attn_cache = None
 
@@ -438,8 +460,11 @@ class BackwardDecoder(nn.Module):
         gs_states = torch.stack(gs_states, 1)  # [batch_size, infer_len, hidden_size]
         # INFO("infer length -> {} ratio -> {}".format(counter, counter / seq_len))
 
+        #gs_states.register_hook(_bp_hook_factory('gs_states'))
+        #output.register_hook(_bp_hook_factory('bd_output_l2r'))
         if not test:
-            output = self.l2r(output)
+            output = self.l2r(output, tgt_lengths)
+        #output.register_hook(_bp_hook_factory('bd_output_r2l'))
 
         return output, gs_states, gs_states_mask
 
@@ -458,8 +483,9 @@ class BackwardDecoder(nn.Module):
             if positions is not None:
                 positions = positions[:, -1:]
 
-        if self.training or (not self.training and not incremental_state):
-            prev_output_tokens = self.r2l(prev_output_tokens)
+        tgt_lengths = prev_output_tokens.ne(self.padding_idx).sum(-1)
+        if self.training or (not self.training and incremental_state is None):
+            prev_output_tokens = self.r2l(prev_output_tokens, tgt_lengths)
 
         bsz, seqlen = prev_output_tokens.size()
 
@@ -480,12 +506,17 @@ class BackwardDecoder(nn.Module):
         if cached_state is not None:
             prev_hiddens, attn_cache = cached_state
         else:
-            no_padding_mask = 1. - encoder_padding_mask.float()
-            encoder_lengths = no_padding_mask.sum(1)
+            no_padding_mask = 1 - encoder_padding_mask
+            # B X 1
+            encoder_lengths = no_padding_mask.sum(0, keepdim=True).t()
             # see https://github.com/pytorch/pytorch/issues/3587
             # see https://pytorch.org/docs/stable/nn.html#gru
-            enc_states = encoder_out.transpose(0, 1).view(bsz, srclen, 2, self.encoder_output_units / 2)
-            forward_n = torch.index_select(enc_states, 1, encoder_lengths - 1)[:, 0, 0, :]
+            # B x S x 2C
+            enc_states = encoder_out.transpose(0, 1)
+            # B x 1 x 2C
+            enc_forward_idx = (encoder_lengths - 1).unsqueeze(-1).expand(-1, -1, enc_states.size(-1))
+            forward_n = torch.gather(enc_states, 1, enc_forward_idx)
+            forward_n = forward_n.view(bsz, 1, 2, self.encoder_output_units // 2)[:, 0, 0, :]
             prev_hiddens = torch.tanh(self.linear_bridge(forward_n))
             attn_cache = None
 
@@ -526,16 +557,60 @@ class BackwardDecoder(nn.Module):
         else:
             output = self.linear_proj(logits)
 
-        if self.training or (not self.training and not incremental_state):
-            output = self.l2r(output)
+        if self.training or (not self.training and incremental_state is None):
+            output = self.l2r(output, tgt_lengths)
 
         return output, None
 
-    def r2l(self, x):
+    def r2l(self, x, lengths):
+        if x.size(1) == 1:
+            return x
+        reorder_idx = [
+            torch.cat([
+                x.new_zeros(1),
+                torch.arange(lengths[i] - 1, 0, -1, device=x.device),
+                torch.arange(lengths[i], x.size(1), 1, device=x.device)
+            ])
+            for i in range(x.size(0))
+        ]
+        reorder_idx = torch.stack(reorder_idx, 0)
+        x = torch.gather(x, 1, reorder_idx)
         return x
 
-    def l2r(self, x):
+    def l2r(self, x, lengths):
+        if x.size(1) == 1:
+            return x
+        reorder_idx = [
+            torch.cat([
+                torch.arange(lengths[i] - 2, -1, -1, device=x.device),
+                torch.arange(lengths[i] - 1, x.size(1), 1, device=x.device)
+            ])
+            for i in range(x.size(0))
+        ]
+        reorder_idx = torch.stack(reorder_idx, 0).unsqueeze(-1).expand(-1, -1, x.size(-1))
+        x = torch.gather(x, 1, reorder_idx)
         return x
+
+    def reorder_incremental_state(self, incremental_state, new_order):
+        super().reorder_incremental_state(incremental_state, new_order)
+        cached_state = utils.get_incremental_state(self, incremental_state, 'cached_state')
+        if cached_state is None:
+            return
+
+        def reorder_state(state):
+            if isinstance(state, list):
+                return [reorder_state(state_i) for state_i in state]
+            return state.index_select(0, new_order)
+
+        new_state = tuple(map(reorder_state, cached_state))
+        utils.set_incremental_state(self, incremental_state, 'cached_state', new_state)
+
+    def max_positions(self):
+        """Maximum output length supported by the decoder."""
+        return int(1e5)  # an arbitrary large number
+
+    def make_generation_fast_(self, need_attn=False, **kwargs):
+        self.need_attn = need_attn
 
 class ForwardDecoder(FairseqIncrementalDecoder):
     """ABDNMT forward decoder."""
@@ -559,7 +634,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
             self.embed_tokens = pretrained_embed
 
         self.encoder_output_units = encoder_output_units
-        self.linear_bridge = Linear(encoder_output_units / 2, hidden_size)
+        self.linear_bridge = Linear(encoder_output_units // 2, hidden_size)
         self.gru1 = GRUCell(embed_dim, hidden_size)
         self.gru2 = GRUCell(encoder_output_units + hidden_size, hidden_size)
         self.attention = MultiHeadMLPAttention(encoder_output_units, hidden_size, hidden_size, head_count)
@@ -582,14 +657,17 @@ class ForwardDecoder(FairseqIncrementalDecoder):
                                                 rnn_dropout=rnn_dropout, head_count=head_count,
                                                 encoder_output_units=encoder_output_units,
                                                 share_input_output_embed=share_input_output_embed,
-                                                pretrained_embed=self.embed_tokens, )
+                                                pretrained_embed=self.embed_tokens)
         self.only_bd = only_bd
         self.bd_write = bd_write
+        self.step = 0
 
     def forward(self, prev_output_tokens, encoder_out_dict, incremental_state=None):
+        self.step += 1
+        #if self.step >= 24:
+        #    ipdb.set_trace()
         if self.only_bd:
             return self.backward_decoder.only_bd_forward(prev_output_tokens, encoder_out_dict, incremental_state)
-
         encoder_out = encoder_out_dict['encoder_out']
         encoder_padding_mask = encoder_out_dict['encoder_padding_mask']
 
@@ -625,10 +703,11 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         else:
             # see https://github.com/pytorch/pytorch/issues/3587
             # see https://pytorch.org/docs/stable/nn.html#gru
-            backward_1 = encoder_out.transpose(0, 1).view(bsz, srclen, 2, self.encoder_output_units / 2)[:, 0, 1, :]
+            backward_1 = encoder_out.transpose(0, 1).view(bsz, srclen, 2, self.encoder_output_units // 2)[:, 0, 1, :]
             prev_hiddens = torch.tanh(self.linear_bridge(backward_1))
             src_attn_cache = None
-            bd_output, bd_states, bd_states_mask = self.backward_decoder(prev_output_tokens, encoder_out_dict, test=(not self.training and incremental_state))
+            bd_output, bd_states, bd_states_mask = self.backward_decoder(prev_output_tokens, encoder_out_dict, test=(not
+                self.training and incremental_state is not None))
             bd_attn_cache = None
 
         hiddens = []
@@ -679,6 +758,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         # B x T x H
         hiddens = torch.stack(hiddens, 1)
         attn_ctxs = torch.stack(attn_ctxs, 1)
+        #ipdb.set_trace()
         logits = F.dropout(
             torch.tanh(
                 self.linear_output(
@@ -688,14 +768,18 @@ class ForwardDecoder(FairseqIncrementalDecoder):
             p=self.common_dropout,
             training=self.training
         )
+        #logits.register_hook(_bp_hook_factory('logits'))
         if self.share_input_output_embed:
             output = F.linear(logits, self.embed_tokens.weight)
         else:
             output = self.linear_proj(logits)
-
+        #output.register_hook(_bp_hook_factory('fd output'))
         return output, {'bd_output': bd_output}
 
     def reorder_incremental_state(self, incremental_state, new_order):
+        if self.only_bd:
+            self.backward_decoder.reorder_incremental_state(incremental_state, new_order)
+            return
         super().reorder_incremental_state(incremental_state, new_order)
         cached_state = utils.get_incremental_state(self, incremental_state, 'cached_state')
         if cached_state is None:
@@ -715,6 +799,35 @@ class ForwardDecoder(FairseqIncrementalDecoder):
 
     def make_generation_fast_(self, need_attn=False, **kwargs):
         self.need_attn = need_attn
+
+    def get_normalized_probs(self, net_output, log_probs, sample):
+        """Get normalized probabilities (or log probs) from a net's output."""
+
+        if hasattr(self, 'adaptive_softmax') and self.adaptive_softmax is not None:
+            if sample is not None:
+                assert 'target' in sample
+                target = sample['target']
+            else:
+                target = None
+            out = self.adaptive_softmax.get_log_prob(net_output[0], target=target)
+            return out.exp_() if not log_probs else out
+        #ipdb.set_trace()
+
+        if self.only_bd:
+            logits = net_output[0]
+            if log_probs:
+                return utils.log_softmax(logits, dim=-1, onnx_trace=self.onnx_trace)
+            else:
+                return utils.softmax(logits, dim=-1, onnx_trace=self.onnx_trace)
+        logits = net_output[0]
+        bd_logits = net_output[1]['bd_output']
+        if log_probs:
+            return (utils.log_softmax(logits, dim=-1, onnx_trace=self.onnx_trace),
+                    utils.log_softmax(bd_logits, dim=-1, onnx_trace=self.onnx_trace))
+        else:
+            return (utils.softmax(logits, dim=-1, onnx_trace=self.onnx_trace),
+                    utils.softmax(bd_logits, dim=-1, onnx_trace=self.onnx_trace))
+
 
 def Embedding(num_embeddings, embedding_dim, padding_idx):
     m = nn.Embedding(num_embeddings, embedding_dim, padding_idx=padding_idx)
@@ -767,7 +880,7 @@ def base_architecture(args):
     args.src_pe = getattr(args, 'src_pe', False)
     args.tgt_pe = getattr(args, 'tgt_pe', False)
     args.only_bd = getattr(args, 'only_bd', False)
-    args.bd_write = getattr(args, 'bd_write', True)
+    args.bd_write = getattr(args, 'bd_write', False)
 
 @register_model_architecture('abdnmt', 'abdnmt_base_ende')
 def base_architecture(args):
@@ -788,4 +901,4 @@ def base_architecture(args):
     args.src_pe = getattr(args, 'src_pe', False)
     args.tgt_pe = getattr(args, 'tgt_pe', False)
     args.only_bd = getattr(args, 'only_bd', False)
-    args.bd_write = getattr(args, 'bd_write', True)
+    args.bd_write = getattr(args, 'bd_write', False)
