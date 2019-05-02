@@ -90,8 +90,11 @@ def main(args, init_distributed=False):
     )
 
     # Load the latest checkpoint if one is available
-    if not load_checkpoint(args, trainer, epoch_itr):
+    if not load_checkpoint(args, trainer, epoch_itr) \
+        and not load_pretrain(args, trainer) \
+        and not load_pretrain_abdnmt(args, trainer):
         trainer.dummy_train_step([dummy_batch])
+
 
     # Train until the learning rate gets too small
     max_epoch = args.max_epoch or math.inf
@@ -357,6 +360,25 @@ def load_checkpoint(args, trainer, epoch_itr):
         print('| no existing checkpoint found {}'.format(checkpoint_path))
     return False
 
+def load_pretrain(args, trainer):
+    pretrain_path = os.path.join(args.save_dir, args.pretrain_file)
+    if os.path.isfile(pretrain_path):
+        utils.load_model_state(pretrain_path, trainer.get_model())
+        print('loaded pretrain {}'.format(pretrain_path))
+        return True
+    else:
+        print('| no existing pretrain found {}'.format(pretrain_path))
+    return False
+
+def load_pretrain_abdnmt(args, trainer):
+    abdnmt_path = os.path.join(args.save_dir, args.pretrain_abdnmt)
+    if os.path.isfile(abdnmt_path):
+        utils.load_pretrain_abdnmt(abdnmt_path, trainer.get_model())
+        print('loaded pretrain {}'.format(abdnmt_path))
+        return True
+    else:
+        print('| no existing pretrain found {}'.format(abdnmt_path))
+    return False
 
 def load_dataset_splits(task, splits):
     for split in splits:

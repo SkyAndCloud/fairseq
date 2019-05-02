@@ -325,6 +325,8 @@ def add_checkpoint_args(parser):
     # fmt: off
     group.add_argument('--save-dir', metavar='DIR', default='checkpoints',
                        help='path to save checkpoints')
+    group.add_argument('--pretrain-file', default='')
+    group.add_argument('--pretrain-abdnmt', default='')
     group.add_argument('--restore-file', default='checkpoint_last.pt',
                        help='filename in save-dir from which to load checkpoint')
     group.add_argument('--reset-optimizer', action='store_true',

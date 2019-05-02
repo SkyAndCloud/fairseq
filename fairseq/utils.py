@@ -80,6 +80,28 @@ def load_model_state(filename, model):
 
     return state['extra_state'], state['optimizer_history'], state['last_optimizer_state']
 
+def load_pretrain_abdnmt(filename, model):
+    if not os.path.exists(filename):
+        return None, [], None
+    state = torch.load(filename, map_location=lambda s, l: default_restore_location(s, 'cpu'))
+    state = _upgrade_state_dict(state)
+
+    params = dict()
+    for k, v in state['model'].items():
+        if 'encoder' in k or 'backward_decoder' in k or 'decoder.embed_tokens' in k:
+            print('load {}'.format(k))
+            params[k] = v
+
+    # load encoder, embedding, linear layer before softmax
+    try:
+
+        model.load_state_dict(params, strict=True)
+    except Exception:
+        raise Exception('Cannot load model parameters from checkpoint, '
+                        'please ensure that the architectures match')
+
+    return state['extra_state'], state['optimizer_history'], state['last_optimizer_state']
+
 
 def _upgrade_state_dict(state):
     """Helper for upgrading old model checkpoints."""

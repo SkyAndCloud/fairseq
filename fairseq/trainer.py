@@ -203,6 +203,7 @@ class Trainer(object):
             except RuntimeError as e:
                 if 'out of memory' in str(e):
                     print(('| WARNING: ran out of memory with exception: {};\n Skipping batch').format(str(e)))
+                    torch.cuda.empty_cache()
                     ooms += 1
                     self.zero_grad()
                 else:
@@ -229,6 +230,7 @@ class Trainer(object):
         self.meters['oom'].update(ooms, len(samples))
         if ooms == self.args.distributed_world_size * len(samples):
             print('| WARNING: OOM in all workers, skipping update')
+            torch.cuda.empty_cache()
             self.zero_grad()
             return None
 
@@ -275,6 +277,7 @@ class Trainer(object):
                 self.meters['train_nll_loss'].update(logging_output.get('nll_loss', 0), ntokens)
         except OverflowError as e:
             print('| WARNING: overflow detected, ' + str(e))
+            torch.cuda.empty_cache()
             self.zero_grad()
             logging_output = None
 

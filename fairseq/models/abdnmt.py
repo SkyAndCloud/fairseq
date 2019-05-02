@@ -188,7 +188,7 @@ class Encoder(FairseqEncoder):
         x = self.embed_tokens(src_tokens)
         if self.src_pe:
             x = self.src_pe(src_tokens) * self.embed_scale + x
-        x = F.dropout(x, p=self.common_dropout, training=self.training)
+        x = F.dropout(x, p=self.common_dropout, training=self.training, inplace=True)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -206,7 +206,7 @@ class Encoder(FairseqEncoder):
 
         # unpack outputs and apply dropout
         x, _ = nn.utils.rnn.pad_packed_sequence(packed_outs, padding_value=self.padding_value)
-        x = F.dropout(x, p=self.common_dropout, training=self.training)
+        #x = F.dropout(x, p=self.common_dropout, training=self.training, inplace=True)
         assert list(x.size()) == [seqlen, bsz, self.output_units]
 
         encoder_padding_mask = src_tokens.eq(self.padding_idx).t()
@@ -351,7 +351,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
 
         # embed tokens
         x = self.embed_tokens(prev_output_tokens)
-        x = F.dropout(x, p=self.common_dropout, training=self.training)
+        x = F.dropout(x, p=self.common_dropout, training=self.training, inplace=True)
 
         # B x T x C -> T x B x C
         emb = x.transpose(0, 1)
@@ -398,14 +398,17 @@ class BackwardDecoder(FairseqIncrementalDecoder):
                     )
                 ),
                 p=self.common_dropout,
-                training=self.training
+                training=self.training,
+                inplace=False
             )
+            del hiddens, attn_ctxs
             if self.share_input_output_embed:
                 output = F.linear(logits, self.embed_tokens.weight)
             else:
                 output = self.linear_proj(logits)
         else:
             output = None
+            logits = None
 
         # greedy search
         gs_emb = emb[0]  # first token, B x C
@@ -432,8 +435,10 @@ class BackwardDecoder(FairseqIncrementalDecoder):
                     )
                 ),
                 p=self.common_dropout,
-                training=self.training
+                training=self.training,
+                inplace=True,
             )
+            del gs_attn_ctx
 
             if self.share_input_output_embed:
                 gs_output = F.linear(gs_logit, self.embed_tokens.weight)
@@ -451,10 +456,10 @@ class BackwardDecoder(FairseqIncrementalDecoder):
             gs_states_mask.append(gs_mask_t)
 
             gs_has_eos[torch.eq(gs_best_logit, self.eos_idx).nonzero()] = 1
-            if gs_has_eos.size(0) == bsz:
+            if gs_has_eos.nonzero().size(0) == bsz:
                 break
             gs_emb = self.embed_tokens(gs_best_logit)
-            gs_emb = F.dropout(gs_emb, p=self.common_dropout, training=self.training)
+            #gs_emb = F.dropout(gs_emb, p=self.common_dropout, training=self.training)
             counter += 1
         gs_states_mask = torch.stack(gs_states_mask, 1)  # [batch_size, infer_len]
         gs_states = torch.stack(gs_states, 1)  # [batch_size, infer_len, hidden_size]
@@ -464,9 +469,10 @@ class BackwardDecoder(FairseqIncrementalDecoder):
         #output.register_hook(_bp_hook_factory('bd_output_l2r'))
         if not test:
             output = self.l2r(output, tgt_lengths)
+            logits = self.l2r(logits, tgt_lengths)
         #output.register_hook(_bp_hook_factory('bd_output_r2l'))
 
-        return output, gs_states, gs_states_mask
+        return output, logits, gs_states, gs_states_mask
 
     def only_bd_forward(self, prev_output_tokens, encoder_out_dict, incremental_state=None):
         """use for only_bd option"""
@@ -495,7 +501,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
         x = self.embed_tokens(prev_output_tokens)
         if positions is not None:
             x = positions * self.embed_scale + x
-        x = F.dropout(x, p=self.common_dropout, training=self.training)
+        x = F.dropout(x, p=self.common_dropout, training=self.training, inplace=False)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -550,7 +556,8 @@ class BackwardDecoder(FairseqIncrementalDecoder):
                 )
             ),
             p=self.common_dropout,
-            training=self.training
+            training=self.training,
+            inplace=False,
         )
         if self.share_input_output_embed:
             output = F.linear(logits, self.embed_tokens.weight)
@@ -660,12 +667,8 @@ class ForwardDecoder(FairseqIncrementalDecoder):
                                                 pretrained_embed=self.embed_tokens)
         self.only_bd = only_bd
         self.bd_write = bd_write
-        self.step = 0
 
     def forward(self, prev_output_tokens, encoder_out_dict, incremental_state=None):
-        self.step += 1
-        #if self.step >= 24:
-        #    ipdb.set_trace()
         if self.only_bd:
             return self.backward_decoder.only_bd_forward(prev_output_tokens, encoder_out_dict, incremental_state)
         encoder_out = encoder_out_dict['encoder_out']
@@ -689,7 +692,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         x = self.embed_tokens(prev_output_tokens)
         if positions is not None:
             x = positions * self.embed_scale + x
-        x = F.dropout(x, p=self.common_dropout, training=self.training)
+        x = F.dropout(x, p=self.common_dropout, training=self.training, inplace=True)
 
         # B x T x C -> T x B x C
         x = x.transpose(0, 1)
@@ -698,6 +701,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         cached_state = utils.get_incremental_state(self, incremental_state, 'cached_state')
         # all B x S x H inside attention
         bd_output = None
+        bd_logits = None
         if cached_state is not None:
             prev_hiddens, src_attn_cache, bd_attn_cache, bd_states, bd_states_mask = cached_state
         else:
@@ -706,7 +710,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
             backward_1 = encoder_out.transpose(0, 1).view(bsz, srclen, 2, self.encoder_output_units // 2)[:, 0, 1, :]
             prev_hiddens = torch.tanh(self.linear_bridge(backward_1))
             src_attn_cache = None
-            bd_output, bd_states, bd_states_mask = self.backward_decoder(prev_output_tokens, encoder_out_dict, test=(not
+            bd_output, bd_logits, bd_states, bd_states_mask = self.backward_decoder(prev_output_tokens, encoder_out_dict, test=(not
                 self.training and incremental_state is not None))
             bd_attn_cache = None
 
@@ -766,7 +770,8 @@ class ForwardDecoder(FairseqIncrementalDecoder):
                 )
             ),
             p=self.common_dropout,
-            training=self.training
+            training=self.training,
+            inplace=False
         )
         #logits.register_hook(_bp_hook_factory('logits'))
         if self.share_input_output_embed:
@@ -774,7 +779,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         else:
             output = self.linear_proj(logits)
         #output.register_hook(_bp_hook_factory('fd output'))
-        return output, {'bd_output': bd_output}
+        return output, {'logits': logits, 'bd_output': bd_output, 'bd_logits': bd_logits}
 
     def reorder_incremental_state(self, incremental_state, new_order):
         if self.only_bd:
