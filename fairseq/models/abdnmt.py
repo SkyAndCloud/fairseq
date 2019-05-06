@@ -416,15 +416,16 @@ class BackwardDecoder(FairseqIncrementalDecoder):
         gs_states_mask = []
         gs_has_eos = encoder_padding_mask.new_zeros(emb.size(1))  # B
         gs_hidden = init_hidden
+        gs_attn_cache = attn_cache
         max_len = srclen * 2
         counter = 0
         while counter < max_len:
             gs_tmp_hidden = self.gru1(gs_emb, gs_hidden)
-            gs_attn_ctx, _, _ = self.attention(key=encoder_out.transpose(0, 1),
+            gs_attn_ctx, _, gs_attn_cache = self.attention(key=encoder_out.transpose(0, 1),
                                                value=encoder_out.transpose(0, 1),
-                                               query=tmp_hidden.unsqueeze(1),
+                                               query=gs_tmp_hidden.unsqueeze(1),
                                                mask=encoder_padding_mask.transpose(0, 1),
-                                               enc_attn_cache=attn_cache)
+                                               enc_attn_cache=gs_attn_cache)
             gs_attn_ctx = gs_attn_ctx.squeeze(1)
             gs_hidden = self.gru2(gs_attn_ctx, gs_tmp_hidden)
 
@@ -441,11 +442,11 @@ class BackwardDecoder(FairseqIncrementalDecoder):
             del gs_attn_ctx
 
             if self.share_input_output_embed:
-                gs_output = F.linear(gs_logit, self.embed_tokens.weight)
+                gs_logit = F.linear(gs_logit, self.embed_tokens.weight)
             else:
-                gs_output = self.linear_proj(gs_logit)
-            gs_logprob = F.log_softmax(gs_output, dim=-1)
-            gs_best_logit = torch.max(gs_logprob, -1)[1]  # B
+                gs_logit = self.linear_proj(gs_logit)
+            gs_best_logit = torch.max(F.log_softmax(gs_logit, dim=-1), -1)[1]  # B
+            del gs_logit
 
             # use previous step gs_has_eos to calculate mask
             gs_hidden[gs_has_eos.nonzero()] = 0
