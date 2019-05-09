@@ -110,9 +110,9 @@ def main(args, init_distributed=False):
 
         if epoch_itr.epoch % args.validate_interval == 0:
             valid_losses = validate(args, trainer, task, epoch_itr, valid_subsets)
-
         # only use first validation loss to update the learning rate
-        lr = trainer.lr_step(epoch_itr.epoch, valid_losses[0])
+        # lr = trainer.lr_step(epoch_itr.epoch, valid_losses[0])
+        lr = trainer.get_lr()
 
         # save checkpoint
         if epoch_itr.epoch % args.save_interval == 0:
@@ -164,6 +164,7 @@ def train(args, trainer, task, epoch_itr):
         num_updates = trainer.get_num_updates()
         if args.save_interval_updates > 0 and num_updates % args.save_interval_updates == 0 and num_updates > 0:
             valid_losses = validate(args, trainer, task, epoch_itr, [first_valid])
+            trainer.lr_step(epoch_itr.epoch, valid_losses[0])
             save_checkpoint(args, trainer, epoch_itr, valid_losses[0])
 
         if num_updates >= max_update:

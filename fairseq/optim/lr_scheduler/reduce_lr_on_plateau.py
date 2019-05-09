@@ -22,7 +22,7 @@ class ReduceLROnPlateau(FairseqLRScheduler):
                 ' Consider --lr-scheduler=fixed instead.'
             )
         self.lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            self.optimizer.optimizer, patience=0, factor=args.lr_shrink)
+            self.optimizer.optimizer, patience=0, factor=args.lr_shrink, min_lr=args.min_lr)
 
     def state_dict(self):
         """Return the LR scheduler state dict."""
