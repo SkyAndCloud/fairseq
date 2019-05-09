@@ -406,6 +406,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
                 output = F.linear(logits, self.embed_tokens.weight)
             else:
                 output = self.linear_proj(logits)
+            del logits
         else:
             output = None
             logits = None
@@ -470,10 +471,10 @@ class BackwardDecoder(FairseqIncrementalDecoder):
         #output.register_hook(_bp_hook_factory('bd_output_l2r'))
         if not test:
             output = self.l2r(output, tgt_lengths)
-            logits = self.l2r(logits, tgt_lengths)
+            #logits = self.l2r(logits, tgt_lengths)
         #output.register_hook(_bp_hook_factory('bd_output_r2l'))
 
-        return output, logits, gs_states, gs_states_mask
+        return output, gs_states, gs_states_mask
 
     def only_bd_forward(self, prev_output_tokens, encoder_out_dict, incremental_state=None):
         """use for only_bd option"""
@@ -702,7 +703,6 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         cached_state = utils.get_incremental_state(self, incremental_state, 'cached_state')
         # all B x S x H inside attention
         bd_output = None
-        bd_logits = None
         if cached_state is not None:
             prev_hiddens, src_attn_cache, bd_attn_cache, bd_states, bd_states_mask = cached_state
         else:
@@ -711,7 +711,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
             backward_1 = encoder_out.transpose(0, 1).view(bsz, srclen, 2, self.encoder_output_units // 2)[:, 0, 1, :]
             prev_hiddens = torch.tanh(self.linear_bridge(backward_1))
             src_attn_cache = None
-            bd_output, bd_logits, bd_states, bd_states_mask = self.backward_decoder(prev_output_tokens, encoder_out_dict, test=(not
+            bd_output, bd_states, bd_states_mask = self.backward_decoder(prev_output_tokens, encoder_out_dict, test=(not
                 self.training and incremental_state is not None))
             bd_attn_cache = None
 
@@ -748,7 +748,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
                 new_bd_states = new_bd_states * (
                 1 - bd_attn_weight_1 * bd_forget_gate.unsqueeze(1)) + bd_attn_weight_1 * bd_update_gate.unsqueeze(1)
                 # 1 means pad, 0 means token
-                bd_states_mask_1 = bd_states_mask.unsqueeze(-1).float()
+                bd_states_mask_1 = bd_states_mask.unsqueeze(-1).float().half()
                 bd_states = new_bd_states * (1 - bd_states_mask_1)
                 bd_attn_cache = None
             hiddens.append(prev_hiddens)
@@ -780,7 +780,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         else:
             output = self.linear_proj(logits)
         #output.register_hook(_bp_hook_factory('fd output'))
-        return output, {'logits': logits, 'bd_output': bd_output, 'bd_logits': bd_logits}
+        return output, {'bd_output': bd_output}
 
     def reorder_incremental_state(self, incremental_state, new_order):
         if self.only_bd:

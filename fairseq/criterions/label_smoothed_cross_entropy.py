@@ -100,12 +100,13 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             bd_eps_i = self.eps / bd_lprobs.size(-1)
             bd_loss = (1. - self.eps) * bd_nll_loss + bd_eps_i * bd_smooth_loss
             # agree loss
-            bd_logits = net_output[1]['bd_logits']
-            bd_logits = bd_logits.view(-1, bd_logits.size(-1))
-            logits = net_output[1]['logits']
-            logits = logits.view(-1, logits.size(-1))
-            agree_loss = torch.sqrt((bd_logits - logits).pow(2).mean(dim=-1) + 1e-8)
-            agree_loss = torch.sum(agree_loss * non_pad_mask.float())
+            #bd_logits = net_output[1]['bd_logits']
+            #bd_logits = bd_logits.view(-1, bd_logits.size(-1))
+            #logits = net_output[1]['logits']
+            #logits = logits.view(-1, logits.size(-1))
+            #agree_loss = torch.sqrt((bd_logits - logits).pow(2).mean(dim=-1) + 1e-8)
+            #agree_loss = torch.sum(agree_loss * non_pad_mask.float())
+            agree_loss=0
             # total loss
             total_loss = self.fd_weight * loss + self.bd_weight * bd_loss + self.agree_weight * agree_loss
             total_nll_loss = self.fd_weight * nll_loss + self.bd_weight * bd_nll_loss
