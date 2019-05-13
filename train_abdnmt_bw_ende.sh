@@ -8,7 +8,7 @@ python train.py \
     --pretrain-file ../abdnmt_only_bd_ende/checkpoint28.pt \
     --optimizer adam --adam-eps 1e-6 --clip-norm 5.0 \
     --lr-scheduler reduce_lr_on_plateau --lr-shrink 0.5 \
-    --lr 0.001 --min-lr 5e-5 \
+    --lr 0.001 --min-lr 5e-7 \
     --criterion label_smoothed_cross_entropy --label-smoothing 0.1 --weight-decay 0.0 \
     --max-tokens 2884 --save-dir checkpoints/abdnmt_bw_ende \
     --save-interval-updates 1500 --keep-interval-updates 50 \
