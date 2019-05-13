@@ -13,9 +13,9 @@ declare -a refset=(
 len=${#testset[@]}
 max=`echo $len-1|bc`
 MOSES=/home4/shanyong/mosesdecoder
-BEAM=4
-ALPHA=0.6
-BATCH=250
+BEAM=10
+ALPHA=0
+BATCH=100
 DATABIN=../kernel_attention/data-bin/wmt16_en_de_bpe32k_pretrain
 
 for m in $CKPT_DIR/*.pt; do

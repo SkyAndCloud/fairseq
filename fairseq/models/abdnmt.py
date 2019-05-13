@@ -748,7 +748,9 @@ class ForwardDecoder(FairseqIncrementalDecoder):
                 new_bd_states = new_bd_states * (
                 1 - bd_attn_weight_1 * bd_forget_gate.unsqueeze(1)) + bd_attn_weight_1 * bd_update_gate.unsqueeze(1)
                 # 1 means pad, 0 means token
-                bd_states_mask_1 = bd_states_mask.unsqueeze(-1).float().half()
+                bd_states_mask_1 = bd_states_mask.unsqueeze(-1).float()
+                if 'Half' in bd_states.type():
+                    bd_states_mask_1 = bd_states_mask_1.half()
                 bd_states = new_bd_states * (1 - bd_states_mask_1)
                 bd_attn_cache = None
             hiddens.append(prev_hiddens)
@@ -792,6 +794,8 @@ class ForwardDecoder(FairseqIncrementalDecoder):
             return
 
         def reorder_state(state):
+            if state is None:
+                return state
             if isinstance(state, list):
                 return [reorder_state(state_i) for state_i in state]
             return state.index_select(0, new_order)
@@ -828,11 +832,17 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         logits = net_output[0]
         bd_logits = net_output[1]['bd_output']
         if log_probs:
-            return (utils.log_softmax(logits, dim=-1, onnx_trace=self.onnx_trace),
+            if bd_logits is not None:
+                return (utils.log_softmax(logits, dim=-1, onnx_trace=self.onnx_trace),
                     utils.log_softmax(bd_logits, dim=-1, onnx_trace=self.onnx_trace))
+            else:
+                return utils.log_softmax(logits, dim=-1, onnx_trace=self.onnx_trace), None
         else:
-            return (utils.softmax(logits, dim=-1, onnx_trace=self.onnx_trace),
+            if bd_logits is not None:
+                return (utils.softmax(logits, dim=-1, onnx_trace=self.onnx_trace),
                     utils.softmax(bd_logits, dim=-1, onnx_trace=self.onnx_trace))
+            else:
+                return utils.softmax(logits, dim=-1, onnx_trace=self.onnx_trace), None
 
 
 def Embedding(num_embeddings, embedding_dim, padding_idx):
