@@ -578,14 +578,15 @@ class EnsembleModel(torch.nn.Module):
         else:
             decoder_out = list(model.decoder(tokens, encoder_out))
         decoder_out[0] = decoder_out[0][:, -1:, :]
-        attn = decoder_out[1]
+        #attn = decoder_out[1]
+        attn = None
         if type(attn) is dict:
             attn = attn['attn']
         if attn is not None:
             if type(attn) is dict:
                 attn = attn['attn']
             attn = attn[:, -1, :]
-        probs = model.get_normalized_probs(decoder_out, log_probs=log_probs)
+        probs, _ = model.get_normalized_probs(decoder_out, log_probs=log_probs)
         probs = probs[:, -1, :]
         return probs, attn
 
