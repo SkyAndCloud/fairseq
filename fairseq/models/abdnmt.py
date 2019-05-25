@@ -13,6 +13,8 @@ from . import (
 
 import ipdb
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
 def _bp_hook_factory(n):
     def _bp_hook(grad):
         if np.isinf(grad.detach().cpu().numpy()).any():
@@ -414,6 +416,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
         # greedy search
         gs_emb = emb[0]  # first token, B x C
         gs_states = []
+        gs_best_logits = []
         gs_states_mask = []
         gs_has_eos = encoder_padding_mask.new_zeros(emb.size(1))  # B
         gs_hidden = init_hidden
@@ -447,6 +450,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
             else:
                 gs_logit = self.linear_proj(gs_logit)
             gs_best_logit = torch.max(F.log_softmax(gs_logit, dim=-1), -1)[1]  # B
+            gs_best_logits.append(gs_best_logit)
             del gs_logit
 
             # use previous step gs_has_eos to calculate mask
@@ -465,6 +469,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
             counter += 1
         gs_states_mask = torch.stack(gs_states_mask, 1)  # [batch_size, infer_len]
         gs_states = torch.stack(gs_states, 1)  # [batch_size, infer_len, hidden_size]
+        gs_best_logits = torch.stack(gs_best_logits, 1)
         # INFO("infer length -> {} ratio -> {}".format(counter, counter / seq_len))
 
         #gs_states.register_hook(_bp_hook_factory('gs_states'))
@@ -474,7 +479,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
             logits = self.l2r(logits, tgt_lengths)
         #output.register_hook(_bp_hook_factory('bd_output_r2l'))
 
-        return output, logits, gs_states, gs_states_mask
+        return output, logits, gs_states, gs_states_mask, gs_best_logits
 
     def only_bd_forward(self, prev_output_tokens, encoder_out_dict, incremental_state=None):
         """use for only_bd option"""
@@ -637,6 +642,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
 
         num_embeddings = len(dictionary)
         padding_idx = dictionary.pad()
+        self.padding_idx=padding_idx
         if pretrained_embed is None:
             self.embed_tokens = Embedding(num_embeddings, embed_dim, padding_idx)
         else:
@@ -669,6 +675,10 @@ class ForwardDecoder(FairseqIncrementalDecoder):
                                                 pretrained_embed=self.embed_tokens)
         self.only_bd = only_bd
         self.bd_write = bd_write
+        self.tgt_dict = dictionary
+        from tensorboardX import SummaryWriter
+        self.tb = SummaryWriter(log_dir=f'bw_{bd_write}_new_font')
+        self.cnt = 0
 
     def forward(self, prev_output_tokens, encoder_out_dict, incremental_state=None):
         if self.only_bd:
@@ -704,6 +714,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         # all B x S x H inside attention
         bd_output = None
         bd_logits = None
+        bd_gs_best_logits = None
         if cached_state is not None:
             prev_hiddens, src_attn_cache, bd_attn_cache, bd_states, bd_states_mask = cached_state
         else:
@@ -712,12 +723,13 @@ class ForwardDecoder(FairseqIncrementalDecoder):
             backward_1 = encoder_out.transpose(0, 1).view(bsz, srclen, 2, self.encoder_output_units // 2)[:, 0, 1, :]
             prev_hiddens = torch.tanh(self.linear_bridge(backward_1))
             src_attn_cache = None
-            bd_output, bd_logits, bd_states, bd_states_mask = self.backward_decoder(prev_output_tokens, encoder_out_dict, test=(not
+            bd_output, bd_logits, bd_states, bd_states_mask, bd_gs_best_logits = self.backward_decoder(prev_output_tokens, encoder_out_dict, test=(not
                 self.training and incremental_state is not None))
             bd_attn_cache = None
 
         hiddens = []
         attn_ctxs = []
+        align=[]
         for j in range(seqlen):
             tmp_hidden = self.gru1(x[j, :, :], prev_hiddens)
             src_attn_ctx, _, src_attn_cache = self.attention(key=encoder_out.transpose(0, 1),
@@ -730,6 +742,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
                                                                            query=tmp_hidden.unsqueeze(1),
                                                                            mask=bd_states_mask,
                                                                            enc_attn_cache=bd_attn_cache)
+            align.append(bd_attn_weight.view(-1, bd_attn_weight.size(-1)))
             attn_ctx = torch.cat([src_attn_ctx.squeeze(1), bd_attn_ctx.squeeze(1)], -1)
             prev_hiddens = self.gru2(attn_ctx, tmp_hidden)
             if self.bd_write:
@@ -762,6 +775,42 @@ class ForwardDecoder(FairseqIncrementalDecoder):
             self, incremental_state, 'cached_state',
             (prev_hiddens, src_attn_cache, bd_attn_cache, bd_states, bd_states_mask),
         )
+        align=torch.stack(align, 1).cpu().detach().numpy()
+        if not self.training:
+            self.cnt += 1
+            tgt_mask=prev_output_tokens.ne(self.padding_idx).long()
+            tgt_length=tgt_mask.sum(-1).repeat_interleave(8,dim=0).cpu().detach().numpy()
+            bd_length=(1-bd_states_mask).sum(-1).repeat_interleave(8,dim=0).cpu().detach().numpy()
+            align=align*np.expand_dims(tgt_mask.cpu().detach().numpy().repeat(8,axis=0), -1)
+            align=align[:,:,::-1]
+            row=prev_output_tokens.cpu().detach().numpy().flatten()
+            row=np.array(list(map(lambda x: self.tgt_dict[x], row))).reshape(prev_output_tokens.size())
+            col=bd_gs_best_logits.cpu().detach().numpy().flatten()
+            col=np.array(list(map(lambda x: self.tgt_dict[x], col))).reshape(bd_gs_best_logits.size())
+            col=col[:,::-1]
+            plt.switch_backend('agg')
+            figs={}
+            for i in range(align.shape[0]):
+                if not (self.cnt == 1 and i == 101) and not (self.cnt == 1 and i == 98):
+                    continue
+                if tgt_length[i] < 15 or bd_length[i] < 0.5*tgt_length[i]:
+                    continue
+                tmp_arr=align[i, :tgt_length[i], -bd_length[i]:]
+                upper=np.triu(tmp_arr).sum()
+                tmp_arr_sum=tmp_arr.sum()
+                if self.bd_write:
+                    if upper < (0.9*tmp_arr_sum) or np.trace(tmp_arr) < 0.2*tmp_arr_sum:
+                        continue
+                if not self.bd_write:
+                    if upper > 0.9*tmp_arr_sum or np.trace(tmp_arr) > 0.9*tmp_arr_sum:
+                        continue
+                #if self.bd_write is not True and not (self.cnt == 7 and i//8 ==32) and not (self.cnt == 2 and i//8==24):
+                #    continue
+                fig, ax=plt.subplots()
+                im, cbar=heatmap(align[i,:tgt_length[i],-bd_length[i]:],row[i//8,:tgt_length[i]],col[i//8,-bd_length[i]:],ax=ax,cmap='gray')
+                #texts=annotate_heatmap(im, valfmt='{x:.1f}')
+                fig.tight_layout()
+                self.tb.add_figure(f'{self.bd_write}/{self.cnt}_{i}',fig)
 
         # B x T x H
         hiddens = torch.stack(hiddens, 1)
@@ -919,3 +968,122 @@ def base_architecture(args):
     args.tgt_pe = getattr(args, 'tgt_pe', False)
     args.only_bd = getattr(args, 'only_bd', False)
     args.bd_write = getattr(args, 'bd_write', False)
+
+def heatmap(data, row_labels, col_labels, ax=None,
+            cbar_kw={}, cbarlabel="", **kwargs):
+    """
+    Create a heatmap from a numpy array and two lists of labels.
+
+    Parameters
+    ----------
+    data
+        A 2D numpy array of shape (N, M).
+    row_labels
+        A list or array of length N with the labels for the rows.
+    col_labels
+        A list or array of length M with the labels for the columns.
+    ax
+        A `matplotlib.axes.Axes` instance to which the heatmap is plotted.  If
+        not provided, use current axes or create a new one.  Optional.
+    cbar_kw
+        A dictionary with arguments to `matplotlib.Figure.colorbar`.  Optional.
+    cbarlabel
+        The label for the colorbar.  Optional.
+    **kwargs
+        All other arguments are forwarded to `imshow`.
+    """
+
+    if not ax:
+        ax = plt.gca()
+
+    # Plot the heatmap
+    im = ax.imshow(data, **kwargs)
+
+    # Create colorbar
+    cbar = ax.figure.colorbar(im, ax=ax, **cbar_kw)
+    cbar.ax.set_ylabel(cbarlabel, rotation=-90, va="bottom")
+
+    # We want to show all ticks...
+    ax.set_xticks(np.arange(data.shape[1]))
+    ax.set_yticks(np.arange(data.shape[0]))
+    # ... and label them with the respective list entries.
+    fd={'fontsize': 12, 'fontweight': 'black'}
+    ax.set_xticklabels(col_labels,fontdict=fd)
+    ax.set_yticklabels(row_labels,fontdict=fd)
+
+    # Let the horizontal axes labeling appear on top.
+    ax.tick_params(top=True, bottom=False,
+                   labeltop=True, labelbottom=False)
+
+    # Rotate the tick labels and set their alignment.
+    plt.setp(ax.get_xticklabels(), rotation=90)
+
+    # Turn spines off and create white grid.
+    for edge, spine in ax.spines.items():
+        spine.set_visible(False)
+
+    ax.set_xticks(np.arange(data.shape[1]+1)-.5, minor=True)
+    ax.set_yticks(np.arange(data.shape[0]+1)-.5, minor=True)
+    ax.grid(which="minor", color="w", linestyle='-', linewidth=0.)
+    ax.tick_params(which="minor", bottom=False, left=False)
+
+    return im, cbar
+
+
+def annotate_heatmap(im, data=None, valfmt="{x:.2f}",
+                     textcolors=["black", "white"],
+                     threshold=None, **textkw):
+    """
+    A function to annotate a heatmap.
+
+    Parameters
+    ----------
+    im
+        The AxesImage to be labeled.
+    data
+        Data used to annotate.  If None, the image's data is used.  Optional.
+    valfmt
+        The format of the annotations inside the heatmap.  This should either
+        use the string format method, e.g. "$ {x:.2f}", or be a
+        `matplotlib.ticker.Formatter`.  Optional.
+    textcolors
+        A list or array of two color specifications.  The first is used for
+        values below a threshold, the second for those above.  Optional.
+    threshold
+        Value in data units according to which the colors from textcolors are
+        applied.  If None (the default) uses the middle of the colormap as
+        separation.  Optional.
+    **kwargs
+        All other arguments are forwarded to each call to `text` used to create
+        the text labels.
+    """
+
+    if not isinstance(data, (list, np.ndarray)):
+        data = im.get_array()
+
+    # Normalize the threshold to the images color range.
+    if threshold is not None:
+        threshold = im.norm(threshold)
+    else:
+        threshold = im.norm(data.max())/2.
+
+    # Set default alignment to center, but allow it to be
+    # overwritten by textkw.
+    kw = dict(horizontalalignment="center",
+              verticalalignment="center")
+    kw.update(textkw)
+
+    # Get the formatter in case a string is supplied
+    if isinstance(valfmt, str):
+        valfmt = matplotlib.ticker.StrMethodFormatter(valfmt)
+
+    # Loop over the data and create a `Text` for each "pixel".
+    # Change the text's color depending on the data.
+    texts = []
+    for i in range(data.shape[0]):
+        for j in range(data.shape[1]):
+            kw.update(color=textcolors[int(im.norm(data[i, j]) > threshold)])
+            text = im.axes.text(j, i, valfmt(data[i, j], None), **kw)
+            texts.append(text)
+
+    return texts
