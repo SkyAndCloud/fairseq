@@ -6,6 +6,7 @@
 # can be found in the PATENTS file in the same directory.
 
 import itertools
+import json
 import os
 
 from fairseq import options, utils
@@ -18,7 +19,7 @@ from fairseq.data import (
     IndexedRawTextDataset,
     LanguagePairDataset,
 )
-
+from fairseq.data.audio_language_pair_dataset import CustomConverter, AudioLanguagePairDataset
 from . import FairseqTask, register_task
 
 
@@ -119,6 +120,17 @@ class TranslationTask(FairseqTask):
 
         return cls(args, src_dict, tgt_dict)
 
+    def load_audio_split(self, split):
+        # Setup a converter
+        converter = CustomConverter(subsampling_factor=1, preprocess_conf=None)
+
+        # make minibatch list (variable length)
+        split_path = os.path.join(self.args.audio_path, split)
+        split_path = os.path.join(split_path, 'data.json')
+        with open(split_path, 'rb') as f:
+            split_json = json.load(f)['utts']
+        return converter, split_json
+
     def load_dataset(self, split, combine=False, **kwargs):
         """Load a given dataset split.
 
@@ -183,14 +195,26 @@ class TranslationTask(FairseqTask):
             src_dataset = ConcatDataset(src_datasets, sample_ratios)
             tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
 
-        self.datasets[split] = LanguagePairDataset(
-            src_dataset, src_dataset.sizes, self.src_dict,
-            tgt_dataset, tgt_dataset.sizes, self.tgt_dict,
-            left_pad_source=self.args.left_pad_source,
-            left_pad_target=self.args.left_pad_target,
-            max_source_positions=self.args.max_source_positions,
-            max_target_positions=self.args.max_target_positions,
-        )
+        if self.args.audio_path is not None:
+            converter, audio_dataset = self.load_audio_split(split)
+            self.datasets[split] = AudioLanguagePairDataset(
+                src_dataset, src_dataset.sizes, self.src_dict,
+                audio_dataset, converter,
+                tgt_dataset, tgt_dataset.sizes, self.tgt_dict,
+                left_pad_source=self.args.left_pad_source,
+                left_pad_target=self.args.left_pad_target,
+                max_source_positions=self.args.max_source_positions,
+                max_target_positions=self.args.max_target_positions,
+            )
+        else:
+            self.datasets[split] = LanguagePairDataset(
+                src_dataset, src_dataset.sizes, self.src_dict,
+                tgt_dataset, tgt_dataset.sizes, self.tgt_dict,
+                left_pad_source=self.args.left_pad_source,
+                left_pad_target=self.args.left_pad_target,
+                max_source_positions=self.args.max_source_positions,
+                max_target_positions=self.args.max_target_positions,
+            )
 
     def build_dataset_for_inference(self, src_tokens, src_lengths):
         return LanguagePairDataset(src_tokens, src_lengths, self.source_dictionary)

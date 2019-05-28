@@ -11,16 +11,16 @@ Train a new model on one or across multiple GPUs.
 
 import collections
 import itertools
-import os
 import math
+import os
 import random
 
 import torch
 
 from fairseq import distributed_utils, options, progress_bar, tasks, utils
 from fairseq.data import iterators
-from fairseq.trainer import Trainer
 from fairseq.meters import AverageMeter, StopwatchMeter
+from fairseq.trainer import Trainer
 from fairseq.utils import import_user_module
 
 
@@ -122,7 +122,7 @@ def train(args, trainer, task, epoch_itr):
     """Train the model for one epoch."""
     # Update parameters every N batches
     update_freq = args.update_freq[epoch_itr.epoch - 1] \
-            if epoch_itr.epoch <= len(args.update_freq) else args.update_freq[-1]
+        if epoch_itr.epoch <= len(args.update_freq) else args.update_freq[-1]
 
     # Initialize data iterator
     itr = epoch_itr.next_epoch_itr(
@@ -399,7 +399,7 @@ def cli_main():
             print('| NOTE: you may get better performance with: --ddp-backend=no_c10d')
         torch.multiprocessing.spawn(
             fn=distributed_main,
-            args=(args, ),
+            args=(args,),
             nprocs=args.distributed_world_size,
         )
     else:

@@ -111,6 +111,10 @@ def main(args):
         )
         offsets = Binarizer.find_offsets(input_file, num_workers)
         pool = None
+        # we set the number of preprocess workers to be zero for the reason that
+        # multiprocess does't reserve sample id information, so isolated processed
+        # data can't be established connection
+        num_workers = 0
         if num_workers > 1:
             pool = Pool(processes=num_workers - 1)
             for worker_id in range(1, num_workers):

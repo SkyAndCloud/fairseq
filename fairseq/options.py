@@ -227,6 +227,7 @@ def add_dataset_args(parser, train=False, gen=False):
     group.add_argument('--required-batch-size-multiple', default=8, type=int, metavar='N',
                        help='batch size will be a multiplier of this value')
     if train:
+        group.add_argument("--audio-path", metavar='AP', default=None, help="audio feature path")
         group.add_argument('--train-subset', default='train', metavar='SPLIT',
                            choices=['train', 'valid', 'test'],
                            help='data subset to use for training (train, valid, test)')
