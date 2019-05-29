@@ -129,6 +129,13 @@ class TranslationTask(FairseqTask):
         split_path = os.path.join(split_path, 'data.json')
         with open(split_path, 'rb') as f:
             split_json = json.load(f)['utts']
+
+        # if is valid split then set idim/odim
+        if split == 'valid':
+            utts = list(split_json.keys())
+            self.args.idim = int(split_json[utts[0]]['input'][0]['shape'][1])
+            self.args.odim = int(split_json[utts[0]]['output'][0]['shape'][1])
+
         return converter, split_json
 
     def load_dataset(self, split, combine=False, **kwargs):
@@ -196,6 +203,12 @@ class TranslationTask(FairseqTask):
             tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
 
         if self.args.audio_path is not None:
+            self.args.etype = "vggblstmp"
+            self.args.elayers = 3
+            self.args.eunits = 1024
+            self.args.eprojs = 1024
+            self.args.dropout_rate = 0.
+
             converter, audio_dataset = self.load_audio_split(split)
             self.datasets[split] = AudioLanguagePairDataset(
                 src_dataset, src_dataset.sizes, self.src_dict,

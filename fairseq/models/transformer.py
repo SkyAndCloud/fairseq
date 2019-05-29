@@ -7,11 +7,13 @@
 
 import math
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from fairseq import options, utils
+from fairseq.espnet.encoders import encoder_for
 from fairseq.modules import (
     AdaptiveInput, AdaptiveSoftmax, CharacterTokenEmbedder, LayerNorm,
     LearnedPositionalEmbedding, MultiheadAttention, SinusoidalPositionalEmbedding,
@@ -41,8 +43,20 @@ class TransformerModel(FairseqModel):
         :prog:
     """
 
-    def __init__(self, encoder, decoder):
+    def __init__(self, encoder, decoder, audio_encoder=None):
         super().__init__(encoder, decoder)
+        self.audio_encoder = audio_encoder
+
+    def forward(self, src_tokens, src_lengths, prev_output_tokens,
+                audio_frames=None, audio_lengths=None, audio_prev_states=None):
+        encoder_out = self.encoder(src_tokens, src_lengths)
+        if self.audio_encoder is not None:
+            audio_encoder_out = self.audio_encoder(
+                audio_frames, audio_lengths, audio_prev_states
+            )
+            encoder_out += audio_encoder_out
+        decoder_out = self.decoder(prev_output_tokens, encoder_out)
+        return decoder_out
 
     @staticmethod
     def add_args(parser):
@@ -144,7 +158,13 @@ class TransformerModel(FairseqModel):
 
         encoder = TransformerEncoder(args, src_dict, encoder_embed_tokens)
         decoder = TransformerDecoder(args, tgt_dict, decoder_embed_tokens)
-        return TransformerModel(encoder, decoder)
+
+        # subsample info
+        # +1 means input (+1) and layers outputs (args.elayer)
+        subsample = np.ones(args.elayers + 1, dtype=np.int)
+        audio_encoder = encoder_for(args, args.idim, subsample)
+
+        return TransformerModel(encoder, decoder, audio_encoder)
 
 
 @register_model('transformer_lm')

@@ -359,6 +359,7 @@ def load_checkpoint(args, trainer, epoch_itr):
 
 
 def load_dataset_splits(task, splits):
+    assert 'valid' in splits
     for split in splits:
         if split == 'train':
             task.load_dataset(split, combine=True)
