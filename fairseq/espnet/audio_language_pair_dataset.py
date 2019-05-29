@@ -6,8 +6,8 @@ import numpy as np
 import torch
 
 from fairseq.data import LanguagePairDataset
-from fairseq.data.asr_utils.io_utils import LoadInputsAndTargets
-from fairseq.data.asr_utils.nets_utils import pad_list
+from fairseq.espnet.io_utils import LoadInputsAndTargets
+from fairseq.espnet.nets_utils import pad_list
 
 
 class CustomConverter(object):

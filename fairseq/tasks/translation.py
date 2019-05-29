@@ -19,7 +19,7 @@ from fairseq.data import (
     IndexedRawTextDataset,
     LanguagePairDataset,
 )
-from fairseq.data.audio_language_pair_dataset import CustomConverter, AudioLanguagePairDataset
+from fairseq.espnet.audio_language_pair_dataset import CustomConverter, AudioLanguagePairDataset
 from . import FairseqTask, register_task
 
 
