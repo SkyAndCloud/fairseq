@@ -49,13 +49,13 @@ class TransformerModel(FairseqModel):
 
     def forward(self, src_tokens, src_lengths, prev_output_tokens,
                 audio_frames=None, audio_lengths=None, audio_prev_states=None):
-        encoder_out = self.encoder(src_tokens, src_lengths)
+        audio_encoder_out = None
         if self.audio_encoder is not None:
             audio_encoder_out = self.audio_encoder(
                 audio_frames, audio_lengths, audio_prev_states
             )
-            encoder_out += audio_encoder_out
-        decoder_out = self.decoder(prev_output_tokens, encoder_out)
+        encoder_out = self.encoder(src_tokens, src_lengths, audio_encoder_out)
+        decoder_out = self.decoder(prev_output_tokens, encoder_out, audio_encoder_out)
         return decoder_out
 
     @staticmethod
@@ -313,7 +313,7 @@ class TransformerEncoder(FairseqEncoder):
         if self.normalize:
             self.layer_norm = LayerNorm(embed_dim)
 
-    def forward(self, src_tokens, src_lengths):
+    def forward(self, src_tokens, src_lengths, audio_encoder_out):
         """
         Args:
             src_tokens (LongTensor): tokens in the source language of shape
@@ -344,13 +344,14 @@ class TransformerEncoder(FairseqEncoder):
 
         # encoder layers
         for layer in self.layers:
-            x = layer(x, encoder_padding_mask)
+            x = layer(x, encoder_padding_mask, audio_encoder_out)
 
         if self.normalize:
             x = self.layer_norm(x)
 
         return {
             'encoder_out': x,  # T x B x C
+            'audio_encoder_out': audio_encoder_out, # T X B X C
             'encoder_padding_mask': encoder_padding_mask,  # B x T
         }
 
@@ -368,9 +369,13 @@ class TransformerEncoder(FairseqEncoder):
         if encoder_out['encoder_out'] is not None:
             encoder_out['encoder_out'] = \
                 encoder_out['encoder_out'].index_select(1, new_order)
+        if encoder_out['audio_encoder_out'] is not None:
+            encoder_out['audio_encoder_out'] = \
+                encoder_out['audio_encoder_out'].index_select(1, new_order)
         if encoder_out['encoder_padding_mask'] is not None:
             encoder_out['encoder_padding_mask'] = \
                 encoder_out['encoder_padding_mask'].index_select(0, new_order)
+
         return encoder_out
 
     def max_positions(self):
@@ -603,14 +608,26 @@ class TransformerEncoderLayer(nn.Module):
             self.embed_dim, args.encoder_attention_heads,
             dropout=args.attention_dropout,
         )
+
+        cnt = 2
+        # audio attention
+        if args.with_audio:
+            cnt += 1
+            self.audio_attn = MultiheadAttention(
+                self.embed_dim, args.encoder_attention_heads,
+                dropout=args.attention_dropout
+            )
+        else:
+            self.audio_attn = None
+
         self.dropout = args.dropout
         self.relu_dropout = args.relu_dropout
         self.normalize_before = args.encoder_normalize_before
         self.fc1 = Linear(self.embed_dim, args.encoder_ffn_embed_dim)
         self.fc2 = Linear(args.encoder_ffn_embed_dim, self.embed_dim)
-        self.layer_norms = nn.ModuleList([LayerNorm(self.embed_dim) for i in range(2)])
+        self.layer_norms = nn.ModuleList([LayerNorm(self.embed_dim) for i in range(cnt)])
 
-    def forward(self, x, encoder_padding_mask):
+    def forward(self, x, encoder_padding_mask, y=None):
         """
         Args:
             x (Tensor): input to the layer of shape `(seq_len, batch, embed_dim)`
@@ -620,21 +637,33 @@ class TransformerEncoderLayer(nn.Module):
         Returns:
             encoded output of shape `(batch, src_len, embed_dim)`
         """
+        i = 0
         residual = x
-        x = self.maybe_layer_norm(0, x, before=True)
+        x = self.maybe_layer_norm(i, x, before=True)
         x, _ = self.self_attn(query=x, key=x, value=x, key_padding_mask=encoder_padding_mask)
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
-        x = self.maybe_layer_norm(0, x, after=True)
+        x = self.maybe_layer_norm(i, x, after=True)
 
+        # add audio features
+        if self.audio_attn is not None:
+            i += 1
+            residual = x
+            x = self.maybe_layer_norm(i, x, before=True)
+            x, _ = self.audio_attn(query=x, key=y, value=y, key_padding_mask=encoder_padding_mask)
+            x = F.dropout(x, p=self.dropout, training=self.training)
+            x = residual + x
+            x = self.maybe_layer_norm(i, x, before=True)
+
+        i += 1
         residual = x
-        x = self.maybe_layer_norm(1, x, before=True)
+        x = self.maybe_layer_norm(i, x, before=True)
         x = F.relu(self.fc1(x))
         x = F.dropout(x, p=self.relu_dropout, training=self.training)
         x = self.fc2(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
-        x = self.maybe_layer_norm(1, x, after=True)
+        x = self.maybe_layer_norm(i, x, after=True)
         return x
 
     def maybe_layer_norm(self, i, x, before=False, after=False):

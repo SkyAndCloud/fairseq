@@ -203,6 +203,7 @@ class TranslationTask(FairseqTask):
             tgt_dataset = ConcatDataset(tgt_datasets, sample_ratios)
 
         if self.args.audio_path is not None:
+            self.args.with_audio = True
             self.args.etype = "vggblstmp"
             self.args.elayers = 3
             self.args.eunits = 1024
