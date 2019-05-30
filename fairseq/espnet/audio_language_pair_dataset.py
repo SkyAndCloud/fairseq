@@ -8,6 +8,7 @@ import torch
 from fairseq.data import LanguagePairDataset
 from fairseq.espnet.io_utils import LoadInputsAndTargets
 from fairseq.espnet.nets_utils import pad_list
+from fairseq.utils import item
 
 
 class CustomConverter(object):
@@ -86,10 +87,27 @@ class AudioLanguagePairDataset(LanguagePairDataset):
         return sample
 
     def collater(self, samples):
-        samples = super().collater(samples)
-        for sample  in samples:
-            sid = sample['id']
-            ai = self.audio[sid]
-            out = self.converter.transform(ai)
-            sample['audio'] = out
-        return samples
+        # cnt = 0
+        # for i in range(28244):
+        #     name = 'utt{}'.format(i)
+        #     if name not in self.audio:
+        #         print('Missing {}'.format(name))
+        #         cnt += 1
+        #         continue
+        # print('Missing {}'.format(cnt))
+        # exit()
+
+
+        batch = super().collater(samples)
+
+        items = []
+        for sid in batch['id']:
+            name = 'utt{}'.format(item(sid))
+            if name not in self.audio:
+                print('Missing {}'.format(name))
+                exit(0)
+            items.append((name, self.audio[name]))
+        output = self.converter.transform(items)
+        batch['net_input']['audio_frames'] = output[0]
+        batch['net_input']['audio_tokens'] = output[1]
+        return batch
