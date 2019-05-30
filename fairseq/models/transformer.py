@@ -47,13 +47,10 @@ class TransformerModel(FairseqModel):
         super().__init__(encoder, decoder)
         self.audio_encoder = audio_encoder
 
-    def forward(self, src_tokens, src_lengths, prev_output_tokens,
-                audio_frames=None, audio_lengths=None, audio_prev_states=None):
+    def forward(self, src_tokens, src_lengths, prev_output_tokens,audio_input=None):
         audio_encoder_out = None
         if self.audio_encoder is not None:
-            audio_encoder_out = self.audio_encoder(
-                audio_frames, audio_lengths, audio_prev_states
-            )
+            audio_encoder_out = self.audio_encoder(*(audio_input[:2]))
         encoder_out = self.encoder(src_tokens, src_lengths, audio_encoder_out)
         decoder_out = self.decoder(prev_output_tokens, encoder_out, audio_encoder_out)
         return decoder_out
