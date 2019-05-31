@@ -5,7 +5,7 @@
 #--pretrain-file ../abdnmt_only_bd_nist/checkpoint24.pt \
 model=abdnmt_l2_enro
 #CUDA_VISIBLE_DEVICES=2,3 python -m torch.distributed.launch --master_port 23334 --nproc_per_node 2 train.py /home/shanyong/wmt16_en_ro/fairseq_databin \
-CUDA_VISIBLE_DEVICES=2 python train.py /home/shanyong/wmt16_en_ro/fairseq_databin \
+CUDA_VISIBLE_DEVICES=0 python train.py ~/wmt16_en_ro/fairseq_databin \
     --ddp-backend no_c10d \
     --arch abdnmt_base_nist --share-all-embeddings \
     --pretrain-file ../abdnmt_only_bd_enro/checkpoint_best.pt \
@@ -17,4 +17,4 @@ CUDA_VISIBLE_DEVICES=2 python train.py /home/shanyong/wmt16_en_ro/fairseq_databi
     --max-tokens 2048 --save-dir checkpoints/$model \
     --tensorboard-logdir events/$model \
     --max-epoch 30 \
-    --update-freq 2 --no-progress-bar --log-format json --log-interval 100 | tee logs/$model.log
+    --update-freq 1 --no-progress-bar --log-format json --log-interval 1 | tee logs/$model.log

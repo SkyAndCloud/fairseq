@@ -20,8 +20,11 @@ def _bp_hook_factory(n):
             import pdb; pdb.set_trace()
         if torch.isnan(grad).any():
             print('{} grad is NaN!'.format(n))
+            import pdb; pdb.set_trace()
     return _bp_hook
-
+def _add_bp_hook(t, n):
+    if t.requires_grad:
+        t.register_hook(_bp_hook_factory(n))
 def _isnan(x):
     return np.isnan(x.detach().cpu().numpy()).any()
 def _isinf(x):
@@ -37,6 +40,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         self.bd_weight = args.bd_weight
         self.agree_weight = args.agree_weight
         self.only_bd = args.only_bd
+        self.cnt = 0
 
     @staticmethod
     def add_args(parser):
@@ -58,6 +62,9 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         3) logging outputs to display while training
         """
         #import ipdb; ipdb.set_trace()
+        #self.cnt += 1
+        #if self.cnt >= 201:
+        #    ipdb.set_trace()
         net_output = model(**sample['net_input'])
         loss, nll_loss = self.compute_loss(model, net_output, sample, reduce=reduce)
         sample_size = sample['target'].size(0) if self.args.sentence_avg else sample['ntokens']
@@ -80,7 +87,7 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         non_pad_mask = target.ne(self.padding_idx)
         # fd loss
         lprobs = lprobs.view(-1, lprobs.size(-1))
-        #lprobs.register_hook(_bp_hook_factory('fd lprobs'))
+        _add_bp_hook(lprobs, 'fd lprobs')
         nll_loss = -lprobs.gather(dim=-1, index=target)[non_pad_mask]
         smooth_loss = -lprobs.sum(dim=-1, keepdim=True)[non_pad_mask]
         if reduce:
@@ -106,6 +113,8 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             logits = logits.view(-1, logits.size(-1))
             agree_loss = torch.sqrt((bd_logits - logits).pow(2).sum(dim=-1) + 1e-8)
             agree_loss = torch.sum(agree_loss * non_pad_mask.squeeze(-1).float())
+            _add_bp_hook(agree_loss, 'agree_loss')
+            print(f"cnt:{self.cnt} agree_loss: {agree_loss.item()}")
             #agree_loss=0
             # total loss
             total_loss = self.fd_weight * loss + self.bd_weight * bd_loss + self.agree_weight * agree_loss

@@ -20,7 +20,9 @@ def _bp_hook_factory(n):
         if torch.isnan(grad).any():
             print('{} grad is NaN!'.format(n))
     return _bp_hook
-
+def _add_bp_hook(t, n):
+    if t.requires_grad:
+        t.register_hook(_bp_hook_factory(n))
 def _isnan(x):
     return np.isnan(x.detach().cpu().numpy()).any()
 def _isinf(x):
@@ -387,6 +389,8 @@ class BackwardDecoder(FairseqIncrementalDecoder):
                 prev_hiddens = self.gru2(attn_ctx, tmp_hidden)
                 hiddens.append(prev_hiddens)
                 attn_ctxs.append(attn_ctx)
+                _add_bp_hook(prev_hiddens, 'bd hidden')
+                _add_bp_hook(attn_ctx, 'bd attn ctx')
 
             # B x T x H
             hiddens = torch.stack(hiddens, 1)
@@ -429,6 +433,8 @@ class BackwardDecoder(FairseqIncrementalDecoder):
                                                enc_attn_cache=gs_attn_cache)
             gs_attn_ctx = gs_attn_ctx.squeeze(1)
             gs_hidden = self.gru2(gs_attn_ctx, gs_tmp_hidden)
+            _add_bp_hook(gs_hidden, 'bd gs hidden')
+            _add_bp_hook(gs_attn_ctx, 'bd gs attn ctx')
 
             gs_logit = F.dropout(
                 torch.tanh(
@@ -446,6 +452,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
                 gs_logit = F.linear(gs_logit, self.embed_tokens.weight)
             else:
                 gs_logit = self.linear_proj(gs_logit)
+            gs_logit[:, self.padding_idx] = float('-inf')
             gs_best_logit = torch.max(F.log_softmax(gs_logit, dim=-1), -1)[1]  # B
             del gs_logit
 
@@ -472,7 +479,7 @@ class BackwardDecoder(FairseqIncrementalDecoder):
         if not test:
             output = self.l2r(output, tgt_lengths)
             logits = self.l2r(logits, tgt_lengths)
-        #output.register_hook(_bp_hook_factory('bd_output_r2l'))
+        _add_bp_hook(output, 'bd output r2l')
 
         return output, logits, gs_states, gs_states_mask
 
@@ -674,6 +681,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
         if self.only_bd:
             return self.backward_decoder.only_bd_forward(prev_output_tokens, encoder_out_dict, incremental_state)
         encoder_out = encoder_out_dict['encoder_out']
+        _add_bp_hook(encoder_out, 'enc out')
         encoder_padding_mask = encoder_out_dict['encoder_padding_mask']
 
         positions = self.tgt_pe(
@@ -692,6 +700,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
 
         # embed tokens
         x = self.embed_tokens(prev_output_tokens)
+        _add_bp_hook(x, 'fd tgt')
         if positions is not None:
             x = positions * self.embed_scale + x
         x = F.dropout(x, p=self.common_dropout, training=self.training, inplace=True)
@@ -718,6 +727,7 @@ class ForwardDecoder(FairseqIncrementalDecoder):
 
         hiddens = []
         attn_ctxs = []
+        _add_bp_hook(bd_states, 'bd states')
         for j in range(seqlen):
             tmp_hidden = self.gru1(x[j, :, :], prev_hiddens)
             src_attn_ctx, _, src_attn_cache = self.attention(key=encoder_out.transpose(0, 1),
@@ -756,6 +766,8 @@ class ForwardDecoder(FairseqIncrementalDecoder):
                 bd_attn_cache = None
             hiddens.append(prev_hiddens)
             attn_ctxs.append(attn_ctx)
+            _add_bp_hook(prev_hiddens, 'fd hidden')
+            _add_bp_hook(attn_ctx, 'fd attn ctx')
 
         # cache previous states (no-op except during incremental generation)
         utils.set_incremental_state(
@@ -777,12 +789,13 @@ class ForwardDecoder(FairseqIncrementalDecoder):
             training=self.training,
             inplace=False
         )
-        #logits.register_hook(_bp_hook_factory('logits'))
+        _add_bp_hook(logits, 'logits')
         if self.share_input_output_embed:
             output = F.linear(logits, self.embed_tokens.weight)
         else:
             output = self.linear_proj(logits)
-        #output.register_hook(_bp_hook_factory('fd output'))
+        _add_bp_hook(output, 'fd output')
+        _add_bp_hook(bd_logits, 'bd logits')
         return output, {'bd_output': bd_output, 'logits': logits, 'bd_logits': bd_logits}
 
     def reorder_incremental_state(self, incremental_state, new_order):
