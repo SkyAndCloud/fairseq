@@ -66,7 +66,7 @@ class TransformerModel(FairseqModel):
                 'audio_padding_mask': mask.squeeze(-1)  # B x T
             }
         encoder_out = self.encoder(src_tokens, src_lengths, audio_encoder_out)
-        decoder_out = self.decoder(prev_output_tokens, encoder_out)
+        decoder_out = self.decoder(prev_output_tokens, encoder_out, audio_encoder_out=audio_encoder_out)
         return decoder_out
 
     @staticmethod
@@ -485,7 +485,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
         if self.normalize:
             self.layer_norm = LayerNorm(embed_dim)
 
-    def forward(self, prev_output_tokens, encoder_out=None, incremental_state=None):
+    def forward(self, prev_output_tokens, encoder_out=None, incremental_state=None, audio_encoder_out=None):
         """
         Args:
             prev_output_tokens (LongTensor): previous decoder outputs of shape
@@ -537,6 +537,7 @@ class TransformerDecoder(FairseqIncrementalDecoder):
                 encoder_out['encoder_padding_mask'] if encoder_out is not None else None,
                 incremental_state,
                 self_attn_mask=self.buffered_future_mask(x) if incremental_state is None else None,
+                audio_encoder_out=audio_encoder_out
             )
             inner_states.append(x)
 
@@ -722,6 +723,15 @@ class TransformerDecoderLayer(nn.Module):
 
         self.self_attn_layer_norm = LayerNorm(self.embed_dim)
 
+        if args.with_audio:
+            self.audio_attn = MultiheadAttention(
+                self.embed_dim, args.decoder_attention_heads,
+                dropout=args.attention_dropout,
+            )
+            self.audio_layer_norm = LayerNorm(self.embed_dim)
+        else:
+            self.audio_attn = None
+
         if no_encoder_attn:
             self.encoder_attn = None
             self.encoder_attn_layer_norm = None
@@ -745,7 +755,7 @@ class TransformerDecoderLayer(nn.Module):
 
     def forward(self, x, encoder_out, encoder_padding_mask, incremental_state,
                 prev_self_attn_state=None, prev_attn_state=None, self_attn_mask=None,
-                self_attn_padding_mask=None):
+                self_attn_padding_mask=None, audio_encoder_out=None):
         """
         Args:
             x (Tensor): input to the layer of shape `(seq_len, batch, embed_dim)`
@@ -775,6 +785,28 @@ class TransformerDecoderLayer(nn.Module):
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
         x = self.maybe_layer_norm(self.self_attn_layer_norm, x, after=True)
+
+        if self.audio_attn is not None:
+            residual = x
+            x = self.maybe_layer_norm(self.audio_layer_norm, x, before=True)
+            if prev_attn_state is not None:
+                if incremental_state is None:
+                    incremental_state = {}
+                prev_key, prev_value = prev_attn_state
+                saved_state = {"prev_key": prev_key, "prev_value": prev_value}
+                self.audio_attn._set_input_buffer(incremental_state, saved_state)
+            x, attn = self.audio_attn(
+                query=x,
+                key=audio_encoder_out['audio_encoder_out'],
+                value=audio_encoder_out['audio_encoder_out'],
+                key_padding_mask=audio_encoder_out['audio_padding_mask'],
+                incremental_state=incremental_state,
+                static_kv=True,
+                need_weights=(not self.training and self.need_attn),
+            )
+            x = F.dropout(x, p=self.dropout, training=self.training)
+            x = residual + x
+            x = self.maybe_layer_norm(self.audio_layer_norm, x, after=True)
 
         attn = None
         if self.encoder_attn is not None:
