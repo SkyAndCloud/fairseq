@@ -52,7 +52,7 @@ class TransformerModel(FairseqModel):
             self.audio_proj = None
         else:
             self.audio_proj = Linear(in_features, out_features, bias=False)
-        self.layer_norm = LayerNorm(out_features)
+        self.audio_layer_norm = LayerNorm(out_features)
 
     def forward(self, src_tokens, src_lengths, prev_output_tokens, audio_input=None):
         audio_encoder_out = None
@@ -60,7 +60,7 @@ class TransformerModel(FairseqModel):
             hs_pad, mask, _ = self.audio_encoder(*(audio_input[:2]))
             if self.audio_proj is not None:
                 hs_pad = self.audio_proj(hs_pad)
-            hs_pad = self.layer_norm(hs_pad)
+            hs_pad = self.audio_layer_norm(hs_pad)
             audio_encoder_out = {
                 'audio_encoder_out': hs_pad.transpose(0, 1),  # Tmax x B x eprojs
                 'audio_padding_mask': mask.squeeze(-1)  # B x T

@@ -97,7 +97,11 @@ class Trainer(object):
         return self._lr_scheduler
 
     def _build_optimizer(self):
-        params = list(filter(lambda p: p.requires_grad, self.model.parameters()))
+        # fix the transformer part (param name not start with audio)
+        def filter_fn(n, p):
+            return p.requires_grad and n.startswith('audio')
+
+        params = [p for n, p in self.model.named_parameters() if filter_fn(n, p)]
         if self.args.fp16:
             if self.cuda and torch.cuda.get_device_capability(0)[0] < 7:
                 print('| WARNING: your device does NOT support faster training with --fp16, '

@@ -355,6 +355,11 @@ def load_checkpoint(args, trainer, epoch_itr):
         return True
     else:
         print('| no existing checkpoint found {}'.format(checkpoint_path))
+
+    # load audio params
+    if args.audio_path is not None:
+        torch.load(trainer._model.audio_encoder, args.audio_encoder)
+
     return False
 
 
