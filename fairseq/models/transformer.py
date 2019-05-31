@@ -380,8 +380,12 @@ class TransformerEncoder(FairseqEncoder):
             encoder_out['encoder_out'] = \
                 encoder_out['encoder_out'].index_select(1, new_order)
         if encoder_out['audio_encoder_out'] is not None:
-            encoder_out['audio_encoder_out'] = \
-                encoder_out['audio_encoder_out'].index_select(1, new_order)
+            hs_pad = encoder_out['audio_encoder_out']['audio_encoder_out']
+            lengths = encoder_out['audio_encoder_out']['audio_lengths']
+            encoder_out['audio_encoder_out']['audio_encoder_out'] = \
+                hs_pad.index_select(1, new_order)
+            encoder_out['audio_encoder_out']['lengths'] = \
+                lengths.index_select(0, new_order)
         if encoder_out['encoder_padding_mask'] is not None:
             encoder_out['encoder_padding_mask'] = \
                 encoder_out['encoder_padding_mask'].index_select(0, new_order)
