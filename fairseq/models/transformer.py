@@ -789,12 +789,6 @@ class TransformerDecoderLayer(nn.Module):
         if self.audio_attn is not None:
             residual = x
             x = self.maybe_layer_norm(self.audio_layer_norm, x, before=True)
-            if prev_attn_state is not None:
-                if incremental_state is None:
-                    incremental_state = {}
-                prev_key, prev_value = prev_attn_state
-                saved_state = {"prev_key": prev_key, "prev_value": prev_value}
-                self.audio_attn._set_input_buffer(incremental_state, saved_state)
             x, attn = self.audio_attn(
                 query=x,
                 key=audio_encoder_out['audio_encoder_out'],
