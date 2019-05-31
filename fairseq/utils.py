@@ -73,7 +73,7 @@ def load_model_state(filename, model):
 
     # load model parameters
     try:
-        model.load_state_dict(state['model'], strict=True)
+        model.load_state_dict(state['model'], strict=False)
     except Exception:
         raise Exception('Cannot load model parameters from checkpoint, '
                         'please ensure that the architectures match')
