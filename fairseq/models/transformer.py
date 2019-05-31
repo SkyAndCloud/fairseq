@@ -651,19 +651,17 @@ class TransformerEncoderLayer(nn.Module):
         Returns:
             encoded output of shape `(batch, src_len, embed_dim)`
         """
-        i = 0
         residual = x
-        x = self.maybe_layer_norm(i, x, before=True)
+        x = self.maybe_layer_norm(0, x, before=True)
         x, _ = self.self_attn(query=x, key=x, value=x, key_padding_mask=encoder_padding_mask)
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
-        x = self.maybe_layer_norm(i, x, after=True)
+        x = self.maybe_layer_norm(0, x, after=True)
 
         # add audio features
         if self.audio_attn is not None:
-            i += 1
             residual = x
-            x = self.maybe_layer_norm(i, x, before=True)
+            x = self.maybe_layer_norm(2, x, before=True)
             x, _ = self.audio_attn(
                 query=x,
                 key=y['audio_encoder_out'],
@@ -672,17 +670,16 @@ class TransformerEncoderLayer(nn.Module):
             )
             x = F.dropout(x, p=self.dropout, training=self.training)
             x = residual + x
-            x = self.maybe_layer_norm(i, x, before=True)
+            x = self.maybe_layer_norm(2, x, after=True)
 
-        i += 1
         residual = x
-        x = self.maybe_layer_norm(i, x, before=True)
+        x = self.maybe_layer_norm(1, x, before=True)
         x = F.relu(self.fc1(x))
         x = F.dropout(x, p=self.relu_dropout, training=self.training)
         x = self.fc2(x)
         x = F.dropout(x, p=self.dropout, training=self.training)
         x = residual + x
-        x = self.maybe_layer_norm(i, x, after=True)
+        x = self.maybe_layer_norm(1, x, after=True)
         return x
 
     def maybe_layer_norm(self, i, x, before=False, after=False):
