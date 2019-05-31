@@ -78,17 +78,16 @@ class AudioLanguagePairDataset(LanguagePairDataset):
         assert isinstance(converter, CustomConverter)
         self.converter = converter
 
-    def __getitem__(self, item):
+    def __getitem__(self, index):
         # sample is a dict containing id, source and target
-        sample = super(self).__getitem__(item)
+        sample = super().__getitem__(index)
         sample.update({
-            'audio': self.audio_dataset[item]
+            'audio': self.audio['utt{}'.format(index)]
         })
         return sample
 
     def collater(self, samples):
         batch = super().collater(samples)
-
         items = []
         for sid in batch['id']:
             name = 'utt{}'.format(item(sid))
