@@ -47,10 +47,14 @@ class TransformerModel(FairseqModel):
         super().__init__(encoder, decoder)
         self.audio_encoder = audio_encoder
 
-    def forward(self, src_tokens, src_lengths, prev_output_tokens,audio_input=None):
+    def forward(self, src_tokens, src_lengths, prev_output_tokens, audio_input=None):
         audio_encoder_out = None
         if self.audio_encoder is not None:
-            audio_encoder_out = self.audio_encoder(*(audio_input[:2]))
+            hs_pad, hlens, _ = self.audio_encoder(*(audio_input[:2]))
+            audio_encoder_out = {
+                'audio_encoder_out': hs_pad.transpose(0, 1),  # Tmax x B x eprojs
+                'audio_lengths': hlens  # ilens
+            }
         encoder_out = self.encoder(src_tokens, src_lengths, audio_encoder_out)
         decoder_out = self.decoder(prev_output_tokens, encoder_out, audio_encoder_out)
         return decoder_out
@@ -348,7 +352,7 @@ class TransformerEncoder(FairseqEncoder):
 
         return {
             'encoder_out': x,  # T x B x C
-            'audio_encoder_out': audio_encoder_out, # T X B X C
+            'audio_encoder_out': audio_encoder_out,  # T X B X C
             'encoder_padding_mask': encoder_padding_mask,  # B x T
         }
 
@@ -647,7 +651,12 @@ class TransformerEncoderLayer(nn.Module):
             i += 1
             residual = x
             x = self.maybe_layer_norm(i, x, before=True)
-            x, _ = self.audio_attn(query=x, key=y, value=y, key_padding_mask=encoder_padding_mask)
+            x, _ = self.audio_attn(
+                query=x,
+                key=y['audio_encoder_out'],
+                value=y['audio_encoder_out'],
+                key_padding_mask=encoder_padding_mask
+            )
             x = F.dropout(x, p=self.dropout, training=self.training)
             x = residual + x
             x = self.maybe_layer_norm(i, x, before=True)
