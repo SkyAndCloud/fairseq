@@ -64,7 +64,7 @@ class TransformerModel(FairseqModel):
                 'audio_lengths': hlens  # ilens
             }
         encoder_out = self.encoder(src_tokens, src_lengths, audio_encoder_out)
-        decoder_out = self.decoder(prev_output_tokens, encoder_out, audio_encoder_out)
+        decoder_out = self.decoder(prev_output_tokens, encoder_out)
         return decoder_out
 
     @staticmethod
