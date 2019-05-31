@@ -216,6 +216,7 @@ class Encoder(torch.nn.Module):
         if typ not in ['lstm', 'gru', 'blstm', 'bgru']:
             logging.error("Error: need to specify an appropriate encoder architecture")
 
+        self.eprojs = eprojs
         if etype.startswith("vgg"):
             if etype[-1] == "p":
                 self.enc = torch.nn.ModuleList([VGG2L(in_channel),

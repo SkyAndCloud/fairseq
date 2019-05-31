@@ -46,11 +46,19 @@ class TransformerModel(FairseqModel):
     def __init__(self, encoder, decoder, audio_encoder=None):
         super().__init__(encoder, decoder)
         self.audio_encoder = audio_encoder
+        in_features = self.audio_encoder.eprojs
+        out_features = self.encoder.embed_dim
+        if in_features == out_features:
+            self.audio_proj = None
+        else:
+            self.audio_proj = Linear(in_features, out_features, bias=False)
 
     def forward(self, src_tokens, src_lengths, prev_output_tokens, audio_input=None):
         audio_encoder_out = None
         if self.audio_encoder is not None:
             hs_pad, hlens, _ = self.audio_encoder(*(audio_input[:2]))
+            if self.audio_proj is not None:
+                hs_pad = self.audio_proj(hs_pad)
             audio_encoder_out = {
                 'audio_encoder_out': hs_pad.transpose(0, 1),  # Tmax x B x eprojs
                 'audio_lengths': hlens  # ilens
@@ -293,6 +301,7 @@ class TransformerEncoder(FairseqEncoder):
         self.dropout = args.dropout
 
         embed_dim = embed_tokens.embedding_dim
+        self.embed_dim = embed_dim
         self.padding_idx = embed_tokens.padding_idx
         self.max_source_positions = args.max_source_positions
 
