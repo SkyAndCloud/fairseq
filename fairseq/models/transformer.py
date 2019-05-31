@@ -56,12 +56,12 @@ class TransformerModel(FairseqModel):
     def forward(self, src_tokens, src_lengths, prev_output_tokens, audio_input=None):
         audio_encoder_out = None
         if self.audio_encoder is not None:
-            hs_pad, hlens, _ = self.audio_encoder(*(audio_input[:2]))
+            hs_pad, mask, _ = self.audio_encoder(*(audio_input[:2]))
             if self.audio_proj is not None:
                 hs_pad = self.audio_proj(hs_pad)
             audio_encoder_out = {
                 'audio_encoder_out': hs_pad.transpose(0, 1),  # Tmax x B x eprojs
-                'audio_lengths': hlens  # ilens
+                'audio_padding_mask': mask.squeeze(-1)  # B x T
             }
         encoder_out = self.encoder(src_tokens, src_lengths, audio_encoder_out)
         decoder_out = self.decoder(prev_output_tokens, encoder_out)
@@ -381,11 +381,11 @@ class TransformerEncoder(FairseqEncoder):
                 encoder_out['encoder_out'].index_select(1, new_order)
         if encoder_out['audio_encoder_out'] is not None:
             hs_pad = encoder_out['audio_encoder_out']['audio_encoder_out']
-            lengths = encoder_out['audio_encoder_out']['audio_lengths']
+            audio_padding_mask = encoder_out['audio_encoder_out']['audio_padding_mask']
             encoder_out['audio_encoder_out']['audio_encoder_out'] = \
                 hs_pad.index_select(1, new_order)
-            encoder_out['audio_encoder_out']['lengths'] = \
-                lengths.index_select(0, new_order)
+            encoder_out['audio_encoder_out']['audio_padding_mask'] = \
+                audio_padding_mask.index_select(0, new_order)
         if encoder_out['encoder_padding_mask'] is not None:
             encoder_out['encoder_padding_mask'] = \
                 encoder_out['encoder_padding_mask'].index_select(0, new_order)
@@ -668,7 +668,7 @@ class TransformerEncoderLayer(nn.Module):
                 query=x,
                 key=y['audio_encoder_out'],
                 value=y['audio_encoder_out'],
-                key_padding_mask=encoder_padding_mask
+                key_padding_mask=y['audio_padding_mask']
             )
             x = F.dropout(x, p=self.dropout, training=self.training)
             x = residual + x
