@@ -88,14 +88,15 @@ class AudioLanguagePairDataset(LanguagePairDataset):
 
     def collater(self, samples):
         batch = super().collater(samples)
-        items = []
-        for sid in batch['id']:
-            name = 'utt{}'.format(item(sid))
-            if name not in self.audio:
-                print('Missing {}'.format(name))
-                exit(0)
-            items.append((name, self.audio[name]))
-        output = [self.converter.transform(items)]
-        output = self.converter(output, torch.device('cuda'))
-        batch['net_input']['audio_input'] = output
+        if 'id' in batch:
+            items = []
+            for sid in batch['id']:
+                name = 'utt{}'.format(item(sid))
+                if name not in self.audio:
+                    print('Missing {}'.format(name))
+                    exit(0)
+                items.append((name, self.audio[name]))
+            output = [self.converter.transform(items)]
+            output = self.converter(output, torch.device('cuda'))
+            batch['net_input']['audio_input'] = output
         return batch
