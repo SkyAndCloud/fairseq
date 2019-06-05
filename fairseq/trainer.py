@@ -99,7 +99,7 @@ class Trainer(object):
     def _build_optimizer(self):
         # fix the transformer part (param name not start with audio)
         def filter_fn(n, p):
-            return p.requires_grad and n.startswith('audio')
+            return p.requires_grad and 'audio' in n
 
         params = [p for n, p in self.model.named_parameters() if filter_fn(n, p)]
         if self.args.fp16:
