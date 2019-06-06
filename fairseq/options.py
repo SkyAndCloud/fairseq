@@ -296,6 +296,9 @@ def add_optimization_args(parser):
     group.add_argument('--update-freq', default='1', metavar='N1,N2,...,N_K',
                        type=lambda uf: eval_str_list(uf, type=int),
                        help='update parameters every N_i batches, when in epoch i')
+    group.add_argument('--fix-transformer', action="store_true", default=False,
+                       help='whether or not fix transformer part')
+
 
     # Optimizer definitions can be found under fairseq/optim/
     group.add_argument('--optimizer', default='nag', metavar='OPT',
