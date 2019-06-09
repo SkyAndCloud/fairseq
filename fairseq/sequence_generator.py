@@ -122,8 +122,8 @@ class SequenceGenerator(object):
         # separately, but SequenceGenerator directly calls model.encoder
         encoder_input = {
             k: v for k, v in sample['net_input'].items()
-            if k != 'prev_output_tokens'
         }
+        encoder_input.pop('prev_output_tokens')
 
         src_tokens = encoder_input['src_tokens']
         src_lengths = (src_tokens.ne(self.eos) & src_tokens.ne(self.pad)).long().sum(dim=1)
@@ -544,7 +544,29 @@ class EnsembleModel(torch.nn.Module):
     def forward_encoder(self, encoder_input):
         if not self.has_encoder():
             return None
-        return [model.encoder(**encoder_input) for model in self.models]
+
+        assert len(self.models) == 1
+        model = self.models[0]
+        audio_encoder_out = None
+        if model.audio_encoder is not None:
+            hs_pad, mask, _ = model.audio_encoder(
+                *(encoder_input['audio_input'][:2])
+            )
+            if model.audio_proj is not None:
+                hs_pad = model.audio_proj(hs_pad)
+            hs_pad = model.audio_layer_norm(hs_pad)
+            audio_encoder_out = {
+                'audio_encoder_out': hs_pad.transpose(0, 1),  # Tmax x B x eprojs
+                'audio_padding_mask': mask.squeeze(-1)  # B x T
+            }
+        encoder_out = model.encoder(
+            encoder_input['src_tokens'],
+            encoder_input['src_lengths'],
+            audio_encoder_out
+        )
+        encoder_out['audio_encoder_out'] = audio_encoder_out
+
+        return [encoder_out]
 
     @torch.no_grad()
     def forward_decoder(self, tokens, encoder_outs):
@@ -574,7 +596,7 @@ class EnsembleModel(torch.nn.Module):
 
     def _decode_one(self, tokens, model, encoder_out, incremental_states, log_probs):
         if self.incremental_states is not None:
-            decoder_out = list(model.decoder(tokens, encoder_out, incremental_state=self.incremental_states[model]))
+            decoder_out = list(model.decoder(tokens, encoder_out, incremental_state=self.incremental_states[model], audio_encoder_out=encoder_out['audio_encoder_out']))
         else:
             decoder_out = list(model.decoder(tokens, encoder_out))
         decoder_out[0] = decoder_out[0][:, -1:, :]
