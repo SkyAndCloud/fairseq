@@ -45,14 +45,16 @@ class TransformerModel(FairseqModel):
 
     def __init__(self, encoder, decoder, audio_encoder=None):
         super().__init__(encoder, decoder)
+
         self.audio_encoder = audio_encoder
-        in_features = self.audio_encoder.eprojs
-        out_features = self.encoder.embed_dim
-        if in_features == out_features:
-            self.audio_proj = None
-        else:
-            self.audio_proj = Linear(in_features, out_features, bias=False)
-        self.audio_layer_norm = LayerNorm(out_features)
+        if audio_encoder is not None:
+            in_features = self.audio_encoder.eprojs
+            out_features = self.encoder.embed_dim
+            if in_features == out_features:
+                self.audio_proj = None
+            else:
+                self.audio_proj = Linear(in_features, out_features, bias=False)
+            self.audio_layer_norm = LayerNorm(out_features)
 
     def forward(self, src_tokens, src_lengths, prev_output_tokens, audio_input=None):
         audio_encoder_out = None
@@ -170,10 +172,12 @@ class TransformerModel(FairseqModel):
         encoder = TransformerEncoder(args, src_dict, encoder_embed_tokens)
         decoder = TransformerDecoder(args, tgt_dict, decoder_embed_tokens)
 
-        # subsample info
-        # +1 means input (+1) and layers outputs (args.elayer)
-        subsample = np.ones(args.elayers + 1, dtype=np.int)
-        audio_encoder = encoder_for(args, args.idim, subsample)
+        audio_encoder = None
+        if args.with_audio:
+            # subsample info
+            # +1 means input (+1) and layers outputs (args.elayer)
+            subsample = np.ones(args.elayers + 1, dtype=np.int)
+            audio_encoder = encoder_for(args, args.idim, subsample)
 
         return TransformerModel(encoder, decoder, audio_encoder)
 
