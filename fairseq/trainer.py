@@ -101,7 +101,7 @@ class Trainer(object):
         def filter_fn(n, p):
             cond = p.requires_grad
             if self.args.fix_transformer:
-                cond &= ('audio' in n)
+                cond &= ('audio' in n and 'audio_encoder' not in n)
             return  cond
 
         params = [p for n, p in self.model.named_parameters() if filter_fn(n, p)]
