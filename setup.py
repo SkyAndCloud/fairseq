@@ -27,6 +27,7 @@ bleu = Extension(
 )
 
 
+
 setup(
     name='fairseq',
     version='0.6.2',
@@ -57,6 +58,9 @@ setup(
             'fairseq-preprocess = fairseq_cli.preprocess:cli_main',
             'fairseq-train = fairseq_cli.train:cli_main',
             'fairseq-score = fairseq_cli.score:main',
+            'fairseq-etl = fairseq_cli.etl:main',
+            'fairseq-deetl = fairseq_cli.deetl:main',
+            'fairseq-etl-js2txt = fairseq_cli.etl_js2txt:main',
         ],
     },
 )
