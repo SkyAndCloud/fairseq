@@ -8,12 +8,66 @@
 """
 Translate pre-processed data with a trained model.
 """
+import copy
+import os
 
 import torch
 
 from fairseq import bleu, options, progress_bar, tasks, utils
 from fairseq.meters import StopwatchMeter, TimeMeter
 from fairseq.utils import import_user_module
+from fairseq.utils import override_model_args, load_checkpoint_to_cpu
+
+
+def load_ensemble_for_inference(raw_args, filenames, task, model_arg_overrides=None):
+    """Load an ensemble of models for inference.
+
+    model_arg_overrides allows you to pass a dictionary model_arg_overrides --
+    {'arg_name': arg} -- to override model args that were used during model
+    training
+    """
+    # load model architectures and weights
+    states = []
+    for filename in filenames:
+        if not os.path.exists(filename):
+            raise IOError('Model file not found: {}'.format(filename))
+        state = load_checkpoint_to_cpu(filename)
+        states.append(state)
+
+    # support model_arg_overrides to be either None, dict or list
+    if model_arg_overrides is not None and isinstance(model_arg_overrides, list):
+        assert len(model_arg_overrides) == len(states)
+
+    ensemble = []
+    for i, state in enumerate(states):
+        args = state['args']
+
+        if model_arg_overrides is not None:
+            if isinstance(model_arg_overrides, dict):
+                args = override_model_args(args, model_arg_overrides)
+            else:
+                if 'task' in model_arg_overrides[i]:
+                    _args = copy.deepcopy(raw_args) # get a copy of the raw
+                    _args = override_model_args(_args, model_arg_overrides[i])
+                    if model_arg_overrides[i]['task'] == 'language_modeling':
+                        _args.data = _args.data[0]
+                        _args.output_dictionary_size = -1
+                    task = tasks.setup_task(_args) # resetup
+
+        # build model for ensemble
+        model = task.build_model(args)
+        model.upgrade_state_dict(state['model'])
+        model.load_state_dict(state['model'], strict=True)
+        ensemble.append(model)
+
+        # some args (e.g., tokens_per_sample) might have been updated while building the model
+        if model_arg_overrides is not None:
+            if isinstance(model_arg_overrides, dict):
+                args = override_model_args(args, model_arg_overrides)
+            else:
+                args = override_model_args(args, model_arg_overrides[i])
+
+    return ensemble, args
 
 
 def main(args):
@@ -47,8 +101,8 @@ def main(args):
 
     # Load ensemble
     print('| loading model(s) from {}'.format(args.path))
-    models, _model_args = utils.load_ensemble_for_inference(
-        args.path.split(':'), task, model_arg_overrides=eval(args.model_overrides),
+    models, _model_args = load_ensemble_for_inference(
+        args, args.path.split(':'), task, model_arg_overrides=eval(args.model_overrides),
     )
 
     # Optimize ensemble for generation
